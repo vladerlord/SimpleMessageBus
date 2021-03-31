@@ -1,6 +1,6 @@
 using System;
 
-namespace SimpleMessageBus
+namespace SimpleMessageBus.Abstractions
 {
     public enum MessageType
     {

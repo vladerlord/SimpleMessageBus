@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
-using SimpleMessageBus.ExampleAbstractions;
+using SimpleMessageBus.Abstractions;
 
 namespace SimpleMessageBus.ExampleProducer
 {

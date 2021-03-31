@@ -1,4 +1,5 @@
 using System;
+using SimpleMessageBus.Abstractions;
 
 namespace SimpleMessageBus
 {

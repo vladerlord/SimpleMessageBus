@@ -49,7 +49,6 @@ namespace SimpleMessageBus
                 _bufferUnderflowControl.Wait();
 
                 var elementsAmount = 0;
-
                 var rightIndex = _leftIndex == _reservedSpaceIndex || _leftIndex > _reservedSpaceIndex
                     ? BufferSize
                     : _reservedSpaceIndex;

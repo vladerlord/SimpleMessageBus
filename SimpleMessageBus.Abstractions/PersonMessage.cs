@@ -1,9 +1,9 @@
 using ProtoBuf;
 
-namespace SimpleMessageBus.ExampleAbstractions
+namespace SimpleMessageBus.Abstractions
 {
     [ProtoContract, CompatibilityLevel(CompatibilityLevel.Level300)]
-    public struct PersonMessage : IMessage
+    public class PersonMessage : IMessage
     {
         [ProtoMember(1)] public long MessageId { get; set; }
         [ProtoMember(2)] public int Id { get; set; }

@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ProtoBuf;
+using SimpleMessageBus.Abstractions;
 
 namespace SimpleMessageBus
 {
@@ -64,7 +65,9 @@ namespace SimpleMessageBus
                         if (_unserializedMessagesIndex == 0)
                             continue;
 
-                        toSerialize = _unserializedMessages.Span[.._unserializedMessagesIndex];
+                        toSerialize = new Span<IMessage>(new IMessage[_unserializedMessagesIndex]);
+
+                        _unserializedMessages.Span[.._unserializedMessagesIndex].CopyTo(toSerialize);
                         _unserializedMessagesIndex = 0;
 
                         resultBufferIndex = ReadyToSendBuffer.ReserveBufferIndex();

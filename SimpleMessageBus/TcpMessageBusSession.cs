@@ -1,9 +1,11 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Net.Sockets;
 using System.Threading.Tasks;
+using SimpleMessageBus.Abstractions;
 
 namespace SimpleMessageBus
 {
@@ -97,8 +99,9 @@ namespace SimpleMessageBus
 
             return true;
         }
-
-        // private static int counter = 0;
+        
+        private static int lastid = -1;
+        private static bool check;
 
         private void OnMessageReceived(byte[] message)
         {
@@ -107,20 +110,32 @@ namespace SimpleMessageBus
 
             try
             {
-                // Console.WriteLine(message.GetString());
                 //
                 // var q =  (MessageType) Convert.ToChar(message[0]);
                 // Console.WriteLine(q);
                 
                 message.DecodeMessage(out var type);
-                // message = message.GetWithoutProtocol();
+                message = message.GetWithoutProtocol();
+
+                // Console.WriteLine(message.GetString());
 
                 switch (type)
                 {
                     case MessageType.Heartbeat:
                         break;
                     case MessageType.Message:
-                        // var deserialized = message.Deserialize<Message>();
+                        var personMessage = message.Deserialize<PersonMessage>();
+
+                        if (personMessage.Id != ++lastid && !check)
+                        {
+                            Console.WriteLine($"Should be: {lastid}, is: {personMessage.Id}");
+                            check = true;
+                            // Console.WriteLine("FUCK");
+                        }
+                        
+                        
+
+                        // Console.WriteLine(deserialized.MessageId);
                         // var returnType = Type.GetType(deserialized.MessageClass);
                         // var messageDecoded = (Person)deserialized.Content.Deserialize(returnType);
 

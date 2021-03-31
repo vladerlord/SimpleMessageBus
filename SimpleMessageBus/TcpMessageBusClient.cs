@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Threading.Tasks;
+using SimpleMessageBus.Abstractions;
 
 namespace SimpleMessageBus
 {
@@ -36,7 +37,7 @@ namespace SimpleMessageBus
         {
             try
             {
-                _tasks.Add(Task.Run(GetCpuUsageForProcess));
+                // _tasks.Add(Task.Run(GetCpuUsageForProcess));
 
                 _tasks.Add(Task.Run(WriteBulk));
                 _tasks.Add(Task.Run(_messageBuffer.Start));
@@ -63,7 +64,9 @@ namespace SimpleMessageBus
                         .ToArray();
 
                     foreach (var bytes in toSend)
+                    {
                         await _stream.WriteAsync(bytes);
+                    }
                 }
             }
             catch (Exception e)
