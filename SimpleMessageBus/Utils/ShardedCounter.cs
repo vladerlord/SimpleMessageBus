@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 
-namespace SimpleMessageBus
+namespace SimpleMessageBus.Utils
 {
     public class ShardedCounter
     {

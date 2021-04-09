@@ -16,7 +16,8 @@ namespace SimpleMessageBus
         private readonly Socket _socket;
 
         private readonly List<Task> _tasks = new();
-        private readonly MessageBuffer _messageBuffer = new();
+        private readonly ClientMessageManager _clientMessageManager = new();
+        private readonly Dictionary<ushort, Type> _messageBinding = new();
 
         public TcpMessageBusClient(string ip, int port)
         {
@@ -26,11 +27,22 @@ namespace SimpleMessageBus
 
             _ip = ip;
             _port = port;
+
+            _messageBinding.Add(1, typeof(PersonMessage));
         }
 
-        public void Send(string exchange, IMessage message)
+        public void Send(string channel, IMessage message)
         {
-            _messageBuffer.AddMessage(message);
+            _clientMessageManager.AddMessage(message);
+        }
+
+        public void AcknowledgeMessage(ulong messageId)
+        {
+            _clientMessageManager.AddRawMessage(MessageType.Ack, messageId.ToString());
+        }
+
+        public void Subscribe(string channel)
+        {
         }
 
         public async Task StartAsync()
@@ -40,7 +52,7 @@ namespace SimpleMessageBus
                 // _tasks.Add(Task.Run(GetCpuUsageForProcess));
 
                 _tasks.Add(Task.Run(WriteBulk));
-                _tasks.Add(Task.Run(_messageBuffer.Start));
+                _tasks.Add(Task.Run(_clientMessageManager.Start));
 
                 await Task.WhenAny(_tasks);
             }
@@ -58,13 +70,18 @@ namespace SimpleMessageBus
             {
                 while (true)
                 {
-                    // or send as span, but without async
-                    var toSend = _messageBuffer.ReadyToSendBuffer
+                    var toSend = _clientMessageManager.ReadyToSendBuffer
                         .TakeMaxReadyElements()
                         .ToArray();
+                    
+//Length: 32, msg: 1??W
+//                     name1440962
+//31578308
+//System.IO.EndOfStreamException: Attempted to read past the end of the stream.
 
                     foreach (var bytes in toSend)
                     {
+                        // Console.WriteLine(bytes.GetString());
                         await _stream.WriteAsync(bytes);
                     }
                 }

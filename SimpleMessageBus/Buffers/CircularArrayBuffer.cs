@@ -1,9 +1,9 @@
 using System;
 using System.Threading;
 
-namespace SimpleMessageBus
+namespace SimpleMessageBus.Buffers
 {
-    public class CircularByteBuffer<T>
+    public class CircularArrayBuffer<T>
     {
         private const int BufferSize = 1000;
         private readonly Memory<T[]> _buffer = new(new T[BufferSize][]);

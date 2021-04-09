@@ -1,11 +1,11 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 using SimpleMessageBus.Abstractions;
+using SimpleMessageBus.Utils;
 
 namespace SimpleMessageBus
 {
@@ -48,7 +48,7 @@ namespace SimpleMessageBus
         {
             try
             {
-                const int minimumBufferSize = 9000;
+                const int minimumBufferSize = 100;
 
                 while (true)
                 {
@@ -72,21 +72,31 @@ namespace SimpleMessageBus
 
         private async Task ReadPipeAsync(PipeReader reader)
         {
-            while (true)
+            try
             {
-                var result = await reader.ReadAsync();
-                var buffer = result.Buffer;
+                while (true)
+                {
+                    var result = await reader.ReadAsync();
+                    var buffer = result.Buffer;
 
-                while (TryReadLine(ref buffer, out var line))
-                    OnMessageReceived(line.ToArray());
+                    while (TryReadLine(ref buffer, out var line))
+                        OnMessageReceived(line.ToArray());
 
-                reader.AdvanceTo(buffer.Start, buffer.End);
+                    reader.AdvanceTo(buffer.Start, buffer.End);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
             }
         }
 
+        private static int someCounter = 0;
+
         private static bool TryReadLine(ref ReadOnlySequence<byte> buffer, out ReadOnlySequence<byte> line)
         {
-            var position = buffer.PositionOf(MessageConfig.Delimiter);
+            var position = buffer.GetDelimiterPosition();
 
             if (position == null)
             {
@@ -95,11 +105,11 @@ namespace SimpleMessageBus
             }
 
             line = buffer.Slice(0, position.Value);
-            buffer = buffer.Slice(buffer.GetPosition(1, position.Value));
+            buffer = buffer.Slice(position.Value + MessageConfig.DelimiterLength);
 
             return true;
         }
-        
+
         private static int lastid = -1;
         private static bool check;
 
@@ -110,14 +120,8 @@ namespace SimpleMessageBus
 
             try
             {
-                //
-                // var q =  (MessageType) Convert.ToChar(message[0]);
-                // Console.WriteLine(q);
-                
-                message.DecodeMessage(out var type);
+                message.DecodeMessage(out var type, out var messageClass);
                 message = message.GetWithoutProtocol();
-
-                // Console.WriteLine(message.GetString());
 
                 switch (type)
                 {
@@ -130,29 +134,17 @@ namespace SimpleMessageBus
                         {
                             Console.WriteLine($"Should be: {lastid}, is: {personMessage.Id}");
                             check = true;
-                            // Console.WriteLine("FUCK");
                         }
-                        
-                        
-
-                        // Console.WriteLine(deserialized.MessageId);
-                        // var returnType = Type.GetType(deserialized.MessageClass);
-                        // var messageDecoded = (Person)deserialized.Content.Deserialize(returnType);
 
                         BandwidthInfo.ReadBytes += message.Length;
                         BandwidthInfo.ReadMessages++;
-
-                        // Console.WriteLine(messageDecoded.Id);
-
-                        // if (messageDecoded.Id != counter++)
-                        // {
-                        //     Console.WriteLine("WTF");
-                        // }
 
                         break;
                     case MessageType.Subscribe:
                         break;
                     case MessageType.Ack:
+                        // Console.WriteLine(message.GetString());
+
                         break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(type), type, null);

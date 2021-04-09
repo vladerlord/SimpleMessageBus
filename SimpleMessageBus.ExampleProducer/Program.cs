@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading.Tasks;
 using SimpleMessageBus.Abstractions;
 
@@ -10,7 +9,7 @@ namespace SimpleMessageBus.ExampleProducer
     {
         static async Task Main(string[] args)
         {
-            Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.RealTime;
+            // Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.RealTime;
             await GetProducer();
         }
 
@@ -37,6 +36,22 @@ namespace SimpleMessageBus.ExampleProducer
                         });
                 }
             }));
+            var counter = 0;
+
+            tasks.Add(Task.Run(async () =>
+            {
+                for (var i = 0u; i < 40_000_000; i++)
+                {
+                    client.AcknowledgeMessage(i);
+
+                    if (++counter >= 6_000)
+                    {
+                        await Task.Delay(2);
+                        counter = 0;
+                    }
+                }
+            }));
+
 
             await Task.WhenAll(tasks);
         }
