@@ -5,7 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 
-namespace SimpleMessageBus
+namespace SimpleMessageBus.Server
 {
     public class TcpMessageBusServer
     {
@@ -48,9 +48,10 @@ namespace SimpleMessageBus
                 while (true)
                 {
                     var socket = await _listener.AcceptSocketAsync();
-                    var session = new TcpMessageBusSession(this, socket);
+                    var sessionId = _tcpSessionIdIndex++;
+                    var session = new TcpMessageBusSession(this, sessionId, socket);
 
-                    _tcpSessions.Add(_tcpSessionIdIndex++, session);
+                    _tcpSessions.Add(sessionId, session);
 
                     _tasks.Add(session.StartAsync());
                 }
@@ -60,6 +61,12 @@ namespace SimpleMessageBus
                 Console.WriteLine(e);
                 throw;
             }
+        }
+
+        public void Disconnect(int sessionId)
+        {
+            _tcpSessions[sessionId].Dispose();
+            Console.WriteLine($"Session: {sessionId} is disconnected");
         }
 
         private async Task ShowBandwidthInfoAsync()

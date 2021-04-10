@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Net;
+using SimpleMessageBus.Server;
 
 namespace SimpleMessageBus.Example
 {

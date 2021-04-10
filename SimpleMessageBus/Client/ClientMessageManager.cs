@@ -8,27 +8,27 @@ using SimpleMessageBus.Abstractions;
 using SimpleMessageBus.Buffers;
 using SimpleMessageBus.Utils;
 
-namespace SimpleMessageBus
+namespace SimpleMessageBus.Client
 {
-    internal class RawMessageNode
+    internal class MessageNode<T>
     {
-        public string Content;
+        public T Content;
         public MessageType MessageType;
     }
 
-    public class ClientMessageManager
+    public class ClientMessageManager : IDisposable
     {
         private const int SerializationWorkersAmount = 3;
 
         private const int UnserializedMessagesBufferSize = 1200;
         private readonly SemaphoreSlim _unserializedMessagesBackpressure = new(UnserializedMessagesBufferSize);
-        private readonly Memory<IMessage> _unserializedMessages = new(new IMessage[UnserializedMessagesBufferSize]);
+        private readonly Memory<MessageNode<IMessage>> _unserializedMessages;
         private readonly object _unserializedMessagesLock = new();
         private int _unserializedMessagesIndex;
 
         private const int RawMessagesBufferSize = 20000;
         private readonly SemaphoreSlim _rawMessagesBackpressure = new(RawMessagesBufferSize);
-        private readonly Memory<RawMessageNode> _rawMessagesBuffer = new(new RawMessageNode[RawMessagesBufferSize]);
+        private readonly Memory<MessageNode<string>> _rawMessagesBuffer;
         private readonly object _rawMessagesBufferLock = new();
         private int _rawMessagesBufferIndex;
 
@@ -38,8 +38,15 @@ namespace SimpleMessageBus
 
         public ClientMessageManager()
         {
+            _unserializedMessages =
+                new Memory<MessageNode<IMessage>>(new MessageNode<IMessage>[UnserializedMessagesBufferSize]);
+            _rawMessagesBuffer = new Memory<MessageNode<string>>(new MessageNode<string>[RawMessagesBufferSize]);
+
+            for (var i = 0; i < UnserializedMessagesBufferSize; i++)
+                _unserializedMessages.Span[i] = new MessageNode<IMessage>();
+
             for (var i = 0; i < RawMessagesBufferSize; i++)
-                _rawMessagesBuffer.Span[i] = new RawMessageNode();
+                _rawMessagesBuffer.Span[i] = new MessageNode<string>();
         }
 
         public Task Start()
@@ -49,7 +56,7 @@ namespace SimpleMessageBus
             for (var i = 0; i < SerializationWorkersAmount; i++)
             {
                 var k = i;
-                tasks.Add(Task.Factory.StartNew(() => SerializationWorker(k), TaskCreationOptions.LongRunning));
+                tasks.Add(Task.Run(() => SerializationWorker(k)));
             }
 
             tasks.Add(Task.Run(ShowWorkersHit));
@@ -63,7 +70,10 @@ namespace SimpleMessageBus
             _unserializedMessagesBackpressure.Wait();
 
             lock (_unserializedMessagesLock)
-                _unserializedMessages.Span[_unserializedMessagesIndex++] = message;
+            {
+                _unserializedMessages.Span[_unserializedMessagesIndex].Content = message;
+                _unserializedMessagesIndex++;
+            }
         }
 
         public void AddRawMessage(MessageType messageType, string content)
@@ -84,7 +94,7 @@ namespace SimpleMessageBus
             {
                 while (true)
                 {
-                    Span<IMessage> toSerialize;
+                    Span<MessageNode<IMessage>> chunk;
 
                     SpinWait.SpinUntil(() => _unserializedMessagesIndex > 0);
 
@@ -95,30 +105,30 @@ namespace SimpleMessageBus
                         if (_unserializedMessagesIndex == 0)
                             continue;
 
-                        toSerialize = new Span<IMessage>(new IMessage[_unserializedMessagesIndex]);
+                        chunk = new Span<MessageNode<IMessage>>(new MessageNode<IMessage>[_unserializedMessagesIndex]);
 
-                        _unserializedMessages.Span[.._unserializedMessagesIndex].CopyTo(toSerialize);
+                        _unserializedMessages.Span[.._unserializedMessagesIndex].CopyTo(chunk);
                         _unserializedMessagesIndex = 0;
 
                         resultBufferIndex = ReadyToSendBuffer.ReserveBufferIndex();
                     }
 
-                    if (toSerialize.Length == 0)
+                    if (chunk.Length == 0)
                         continue;
 
                     using var ms = new MemoryStream();
 
-                    foreach (var message in toSerialize)
+                    foreach (var message in chunk)
                     {
-                        ms.Write(MessageConfig.CreateTcpHeader(MessageType.Message, 1));
-                        Serializer.Serialize(ms, message);
+                        ms.Write(MessageConfig.CreateTcpHeader(MessageType.Message, 0));
+                        Serializer.Serialize(ms, message.Content);
                         ms.Write(MessageConfig.Delimiter);
 
                         _shardedCounter.Increase(1);
                     }
 
                     ReadyToSendBuffer.Set(resultBufferIndex, ms.GetBuffer()[..(int) ms.Position]);
-                    _unserializedMessagesBackpressure.Release(toSerialize.Length);
+                    _unserializedMessagesBackpressure.Release(chunk.Length);
                 }
             }
             catch (Exception e)
@@ -134,7 +144,7 @@ namespace SimpleMessageBus
             {
                 while (true)
                 {
-                    Span<RawMessageNode> chunk;
+                    Span<MessageNode<string>> chunk;
 
                     SpinWait.SpinUntil(() => _rawMessagesBufferIndex > 0);
 
@@ -145,7 +155,7 @@ namespace SimpleMessageBus
                         if (_rawMessagesBufferIndex == 0)
                             continue;
 
-                        chunk = new Span<RawMessageNode>(new RawMessageNode[_rawMessagesBufferIndex]);
+                        chunk = new Span<MessageNode<string>>(new MessageNode<string>[_rawMessagesBufferIndex]);
 
                         _rawMessagesBuffer.Span[.._rawMessagesBufferIndex].CopyTo(chunk);
                         _rawMessagesBufferIndex = 0;
@@ -160,7 +170,7 @@ namespace SimpleMessageBus
 
                     foreach (var message in chunk)
                     {
-                        ms.Write(MessageConfig.CreateTcpHeader(message.MessageType, 23));
+                        ms.Write(MessageConfig.CreateTcpHeader(message.MessageType, 0));
                         ms.Write(message.Content.ToBytes());
                         ms.Write(MessageConfig.Delimiter);
 
@@ -197,6 +207,12 @@ namespace SimpleMessageBus
                 Console.WriteLine(e);
                 throw;
             }
+        }
+
+        public void Dispose()
+        {
+            _unserializedMessagesBackpressure?.Dispose();
+            _rawMessagesBackpressure?.Dispose();
         }
     }
 }

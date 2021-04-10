@@ -5,25 +5,31 @@ using System.IO.Pipelines;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 using SimpleMessageBus.Abstractions;
+using SimpleMessageBus.Buffers;
 using SimpleMessageBus.Utils;
 
-namespace SimpleMessageBus
+namespace SimpleMessageBus.Server
 {
-    public class TcpMessageBusSession
+    public class TcpMessageBusSession : IDisposable
     {
         private readonly Socket _socket;
         private readonly NetworkStream _stream;
         private readonly TcpMessageBusServer _tcpMessageBusServer;
+        private readonly int _sessionId;
 
         public TcpMessageBusBandwidth BandwidthInfo { get; } = new();
+        private readonly ServerMessageManager _serverMessageManager;
+        private readonly BoundedSingleThreadBlockingArrayBuffer<MessageNode> _messageBuffer = new(1000);
 
         private readonly List<Task> _tasks = new();
 
-        public TcpMessageBusSession(TcpMessageBusServer messageBusServer, Socket socket)
+        public TcpMessageBusSession(TcpMessageBusServer messageBusServer, int sessionId, Socket socket)
         {
             _tcpMessageBusServer = messageBusServer;
+            _sessionId = sessionId;
             _socket = socket;
             _stream = new NetworkStream(socket);
+            _serverMessageManager = ServerMessageManager.GetInstance();
         }
 
         public async Task StartAsync()
@@ -34,13 +40,18 @@ namespace SimpleMessageBus
             {
                 _tasks.Add(FillPipeAsync(_socket, pipe.Writer));
                 _tasks.Add(Task.Run(() => ReadPipeAsync(pipe.Reader)));
+                _tasks.Add(Task.Run(WriteBulk));
+                _tasks.Add(Ping());
 
                 await Task.WhenAny(_tasks);
             }
             catch (Exception e)
             {
                 Console.WriteLine(e);
-                throw;
+            }
+            finally
+            {
+                _tcpMessageBusServer.Disconnect(_sessionId);
             }
         }
 
@@ -92,8 +103,6 @@ namespace SimpleMessageBus
             }
         }
 
-        private static int someCounter = 0;
-
         private static bool TryReadLine(ref ReadOnlySequence<byte> buffer, out ReadOnlySequence<byte> line)
         {
             var position = buffer.GetDelimiterPosition();
@@ -128,13 +137,15 @@ namespace SimpleMessageBus
                     case MessageType.Heartbeat:
                         break;
                     case MessageType.Message:
-                        var personMessage = message.Deserialize<PersonMessage>();
+                        // var personMessage = message.Deserialize<PersonMessage>();
 
-                        if (personMessage.Id != ++lastid && !check)
-                        {
-                            Console.WriteLine($"Should be: {lastid}, is: {personMessage.Id}");
-                            check = true;
-                        }
+                        // _serverMessageManager.AddMessage(message, messageClass, channel);
+
+                        // if (personMessage.Id != ++lastid && !check)
+                        // {
+                        //     Console.WriteLine($"Should be: {lastid}, is: {personMessage.Id}");
+                        //     check = true;
+                        // }
 
                         BandwidthInfo.ReadBytes += message.Length;
                         BandwidthInfo.ReadMessages++;
@@ -155,6 +166,50 @@ namespace SimpleMessageBus
                 Console.WriteLine(e);
                 throw;
             }
+        }
+
+        private async Task WriteBulk()
+        {
+            try
+            {
+                while (true)
+                {
+                    var toSend = _messageBuffer.TakeMaxItems().ToArray();
+
+                    foreach (var message in toSend)
+                    {
+                        await _stream.WriteAsync(MessageConfig.CreateTcpHeader(message.MessageType,
+                            message.MessageClass));
+                        await _stream.WriteAsync(message.Content);
+                        await _stream.WriteAsync(MessageConfig.Delimiter);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
+        }
+
+        private async Task Ping()
+        {
+            while (true)
+            {
+                await Task.Delay(1000);
+
+                _messageBuffer.Add(new MessageNode()
+                {
+                    MessageType = MessageType.Heartbeat,
+                    Content = "PING".ToBytes(),
+                });
+            }
+        }
+
+        public void Dispose()
+        {
+            _socket?.Dispose();
+            _stream?.Dispose();
         }
     }
 }

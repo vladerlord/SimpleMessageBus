@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using SimpleMessageBus.Abstractions;
+using SimpleMessageBus.Client;
 
 namespace SimpleMessageBus.ExampleProducer
 {
@@ -28,12 +29,11 @@ namespace SimpleMessageBus.ExampleProducer
             {
                 for (var i = 0; i < 40_000_000; i++)
                 {
-                    client.Send("person.events",
-                        new PersonMessage
-                        {
-                            Id = i,
-                            Name = $"name{i}"
-                        });
+                    client.Send(new PersonMessage
+                    {
+                        Id = i,
+                        Name = $"name{i}"
+                    });
                 }
             }));
             var counter = 0;
@@ -44,16 +44,16 @@ namespace SimpleMessageBus.ExampleProducer
                 {
                     client.AcknowledgeMessage(i);
 
-                    if (++counter >= 6_000)
+                    if (++counter >= 6_500)
                     {
-                        await Task.Delay(2);
+                        await Task.Delay(3);
                         counter = 0;
                     }
                 }
             }));
 
 
-            await Task.WhenAll(tasks);
+            await Task.WhenAny(tasks);
         }
     }
 }
