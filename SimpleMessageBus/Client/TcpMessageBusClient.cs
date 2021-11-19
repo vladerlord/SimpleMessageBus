@@ -1,51 +1,57 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO.Pipelines;
+using System.Linq;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 using SimpleMessageBus.Abstractions;
-using SimpleMessageBus.Utils;
 
 namespace SimpleMessageBus.Client
 {
-    public class TcpMessageBusClient : IDisposable
+    public class TcpMessageBusClient : TcpSocket
     {
-        private readonly string _ip;
-        private readonly int _port;
-
         private readonly NetworkStream _stream;
         private readonly Socket _socket;
 
         private readonly List<Task> _tasks = new();
-        private readonly ClientMessageManager _clientMessageManager = new();
-        private readonly Dictionary<ushort, Type> _messageBinding = new();
+
+        private readonly ClientMessageManager _clientMessageManager;
+        private readonly MessageAcknowledgementManager _messageAcknowledgementManager;
+
+        // type => messageClassId
+        private readonly Dictionary<Type, ushort> _messageBinding = new();
+
+        // messageClassId => consumer callback
+        private readonly Dictionary<ushort, Action<IMessage>> _subscribers = new();
 
         public TcpMessageBusClient(string ip, int port)
         {
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            _clientMessageManager = new ClientMessageManager();
             _socket.Connect(ip, port);
             _stream = new NetworkStream(_socket);
 
-            _ip = ip;
-            _port = port;
+            _messageAcknowledgementManager = new MessageAcknowledgementManager(_clientMessageManager);
+        }
 
-            _messageBinding.Add(1, typeof(PersonMessage));
+        public void AddBinding(Type type, ushort messageClassId)
+        {
+            _messageBinding.Add(type, messageClassId);
+            _messageAcknowledgementManager.AddMessageClassId(messageClassId);
+            _clientMessageManager.AddBinding(type, messageClassId);
         }
 
         public void Send(IMessage message)
         {
-            _clientMessageManager.AddMessage(message);
+            _clientMessageManager.AddMessage(message, _messageBinding[message.GetType()]);
         }
 
-        public void AcknowledgeMessage(ulong messageId)
+        public void Subscribe<T>(Action<T> action) where T : IMessage
         {
-            _clientMessageManager.AddRawMessage(MessageType.Ack, messageId.ToString());
-        }
+            var messageClassId = _messageBinding[typeof(T)];
+            _subscribers.Add(messageClassId, message => action((T)message));
 
-        public void Subscribe(string channel)
-        {
+            _clientMessageManager.AddRawMessage(MessageType.Subscribe, null, messageClassId, 0, 0);
         }
 
         public async Task StartAsync()
@@ -54,12 +60,13 @@ namespace SimpleMessageBus.Client
 
             try
             {
-                // _tasks.Add(Task.Run(GetCpuUsageForProcess));
                 _tasks.Add(Task.Run(() => FillPipeAsync(_socket, pipe.Writer)));
                 _tasks.Add(Task.Run(() => ReadPipeAsync(pipe.Reader)));
 
                 _tasks.Add(Task.Run(WriteBulk));
+                _tasks.Add(Task.Run(ProcessReceivedMessages));
                 _tasks.Add(Task.Run(_clientMessageManager.Start));
+                _tasks.Add(Task.Run(_messageAcknowledgementManager.Start));
 
                 await Task.WhenAny(_tasks);
             }
@@ -70,81 +77,15 @@ namespace SimpleMessageBus.Client
             }
             finally
             {
-                Dispose();
                 Console.WriteLine("Disconnect");
             }
         }
 
-
-        private static async Task FillPipeAsync(Socket socket, PipeWriter writer)
+        protected override void OnMessageReceived(byte[] message)
         {
             try
             {
-                const int minimumBufferSize = 100;
-
-                while (true)
-                {
-                    var memory = writer.GetMemory(minimumBufferSize);
-                    var bytesRead = await socket.ReceiveAsync(memory, SocketFlags.None);
-
-                    if (bytesRead == 0)
-                        break;
-
-                    writer.Advance(bytesRead);
-
-                    await writer.FlushAsync();
-                }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e);
-                throw;
-            }
-        }
-
-        private async Task ReadPipeAsync(PipeReader reader)
-        {
-            try
-            {
-                while (true)
-                {
-                    var result = await reader.ReadAsync();
-                    var buffer = result.Buffer;
-
-                    while (TryReadLine(ref buffer, out var line))
-                        OnMessageReceived(line.ToArray());
-
-                    reader.AdvanceTo(buffer.Start, buffer.End);
-                }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e);
-                throw;
-            }
-        }
-
-        private static bool TryReadLine(ref ReadOnlySequence<byte> buffer, out ReadOnlySequence<byte> line)
-        {
-            var position = buffer.GetDelimiterPosition();
-
-            if (position == null)
-            {
-                line = default;
-                return false;
-            }
-
-            line = buffer.Slice(0, position.Value);
-            buffer = buffer.Slice(position.Value + MessageConfig.DelimiterLength);
-
-            return true;
-        }
-
-        private void OnMessageReceived(byte[] message)
-        {
-            try
-            {
-                message.DecodeMessage(out var type, out var messageClass);
+                message.DecodeMessage(out var type, out var messageClass, out var messageId, out var timerIndex);
                 message = message.GetWithoutProtocol();
 
                 switch (type)
@@ -152,15 +93,46 @@ namespace SimpleMessageBus.Client
                     case MessageType.Heartbeat:
                         break;
                     case MessageType.Message:
+                        _clientMessageManager.AddReceivedMessage(message, messageClass, messageId, timerIndex);
+
                         break;
                     case MessageType.Subscribe:
                         break;
                     case MessageType.Ack:
-                        // Console.WriteLine(message.GetString());
-
+                        break;
+                    case MessageType.Connect:
                         break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(type), type, null);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
+        }
+
+        private Task ProcessReceivedMessages()
+        {
+            try
+            {
+                while (true)
+                {
+                    var stack = _clientMessageManager.ReadyToReceive
+                        .TakeMaxReadyElements();
+
+                    foreach (var messages in stack.Span)
+                    {
+                        foreach (var message in messages)
+                        {
+                            _subscribers[message.MessageClassId].Invoke(message.Content);
+                            _messageAcknowledgementManager.AcknowledgeMessage(message.MessageClassId,
+                                message.MessageId, message.TimerIndex);
+                        }
+                    }
+
+                    _clientMessageManager.ReadyToReceive.Release(stack.Length);
                 }
             }
             catch (Exception e)
@@ -177,11 +149,16 @@ namespace SimpleMessageBus.Client
                 while (true)
                 {
                     var toSend = _clientMessageManager.ReadyToSendBuffer
-                        .TakeMaxReadyElements()
-                        .ToArray();
+                        .TakeMaxReadyElements();
 
-                    foreach (var bytes in toSend)
+                    for (var index = 0; index < toSend.Span.Length; index++)
+                    {
+                        var bytes = toSend.Span[index];
+
                         await _stream.WriteAsync(bytes);
+                    }
+
+                    _clientMessageManager.ReadyToSendBuffer.Release(toSend.Length);
                 }
             }
             catch (Exception e)
@@ -189,31 +166,6 @@ namespace SimpleMessageBus.Client
                 Console.WriteLine(e);
                 throw;
             }
-        }
-
-        private async Task GetCpuUsageForProcess()
-        {
-            while (true)
-            {
-                var startTime = DateTime.UtcNow;
-                var startCpuUsage = Process.GetCurrentProcess().TotalProcessorTime;
-                await Task.Delay(1000);
-
-                var endTime = DateTime.UtcNow;
-                var endCpuUsage = Process.GetCurrentProcess().TotalProcessorTime;
-                var cpuUsedMs = (endCpuUsage - startCpuUsage).TotalMilliseconds;
-                var totalMsPassed = (endTime - startTime).TotalMilliseconds;
-                var cpuUsageTotal = cpuUsedMs / (Environment.ProcessorCount * totalMsPassed);
-
-                Console.WriteLine($"CPU USAGE: {cpuUsageTotal * 100}");
-            }
-        }
-
-        public void Dispose()
-        {
-            _stream?.Dispose();
-            _socket?.Dispose();
-            _clientMessageManager?.Dispose();
         }
     }
 }

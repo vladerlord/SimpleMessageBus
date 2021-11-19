@@ -10,43 +10,84 @@ using SimpleMessageBus.Utils;
 
 namespace SimpleMessageBus.Client
 {
-    internal class MessageNode<T>
+    public struct ClientMessageNode<T>
     {
         public T Content;
         public MessageType MessageType;
+        public ushort MessageClassId;
+        public int MessageId;
+        public ushort TimerIndex;
     }
 
-    public class ClientMessageManager : IDisposable
+    public class ClientMessageManager
     {
         private const int SerializationWorkersAmount = 3;
-
-        private const int UnserializedMessagesBufferSize = 1200;
+        private const int UnserializedMessagesBufferSize = 1100;
         private readonly SemaphoreSlim _unserializedMessagesBackpressure = new(UnserializedMessagesBufferSize);
-        private readonly Memory<MessageNode<IMessage>> _unserializedMessages;
+        private readonly ClientMessageNode<IMessage>[] _unserializedMessages;
         private readonly object _unserializedMessagesLock = new();
         private int _unserializedMessagesIndex;
 
-        private const int RawMessagesBufferSize = 20000;
+        private const int RawMessagesBufferSize = 10_000;
         private readonly SemaphoreSlim _rawMessagesBackpressure = new(RawMessagesBufferSize);
-        private readonly Memory<MessageNode<string>> _rawMessagesBuffer;
+        private readonly ClientMessageNode<string>[] _rawMessagesBuffer;
         private readonly object _rawMessagesBufferLock = new();
         private int _rawMessagesBufferIndex;
 
-        public CircularArrayBuffer<byte> ReadyToSendBuffer { get; } = new();
-        private readonly ShardedCounter _shardedCounter = new();
-        private int _rawMessagesRpsCounter;
+        // for received messages
+        private const int ReceivedWorkersAmount = 2;
+        private const int ReceivedMessagesBufferSize = 1500;
+        private readonly SemaphoreSlim _receivedMessagesBackpressure = new(ReceivedMessagesBufferSize);
+        private readonly ClientMessageNode<byte[]>[] _receivedMessages;
+        private readonly object _receivedMessagesLock = new();
+        private int _receivedMessagesIndex;
+        private readonly Dictionary<Type, ushort> _messageBinding = new();
+
+        private readonly AutoResetEvent _receivedMessagesControl = new(false);
+        private readonly AutoResetEvent _serializationWorkersControl = new(false);
+        private readonly AutoResetEvent _rawMessagesControl = new(false);
+
+        // Shared by workers
+        private readonly Dictionary<int, MemoryStream> _workersStreams = new(SerializationWorkersAmount);
+        private readonly Dictionary<int, ClientMessageNode<string>[]> _rawChunk = new(SerializationWorkersAmount);
+
+        private readonly Dictionary<int, ClientMessageNode<IMessage>[]>
+            _messagesChunk = new(SerializationWorkersAmount);
+
+        private readonly Dictionary<int, int> _rawResultBufferIndex = new(SerializationWorkersAmount);
+        private readonly Dictionary<int, int> _messagesResultBufferIndex = new(SerializationWorkersAmount);
+
+        public ReservationCircularBlockingBuffer<ClientMessageNode<IMessage>[]> ReadyToReceive { get; }
+        public ReservationCircularBlockingBuffer<byte[]> ReadyToSendBuffer { get; } = new(1_000);
+
+        private int _messagesRpsCounter;
+        private int _receivedRpsCounter;
 
         public ClientMessageManager()
         {
-            _unserializedMessages =
-                new Memory<MessageNode<IMessage>>(new MessageNode<IMessage>[UnserializedMessagesBufferSize]);
-            _rawMessagesBuffer = new Memory<MessageNode<string>>(new MessageNode<string>[RawMessagesBufferSize]);
+            ReadyToReceive = new ReservationCircularBlockingBuffer<ClientMessageNode<IMessage>[]>(10_000_000);
+
+            _unserializedMessages = new ClientMessageNode<IMessage>[UnserializedMessagesBufferSize];
+            _rawMessagesBuffer = new ClientMessageNode<string>[RawMessagesBufferSize];
+            _receivedMessages = new ClientMessageNode<byte[]>[ReceivedMessagesBufferSize];
 
             for (var i = 0; i < UnserializedMessagesBufferSize; i++)
-                _unserializedMessages.Span[i] = new MessageNode<IMessage>();
+                _unserializedMessages[i] = new ClientMessageNode<IMessage>();
 
             for (var i = 0; i < RawMessagesBufferSize; i++)
-                _rawMessagesBuffer.Span[i] = new MessageNode<string>();
+                _rawMessagesBuffer[i] = new ClientMessageNode<string>();
+
+            for (var i = 0; i < SerializationWorkersAmount; i++)
+            {
+                _workersStreams[i] = new MemoryStream();
+                _rawChunk[i] = Array.Empty<ClientMessageNode<string>>();
+                _messagesChunk[i] = Array.Empty<ClientMessageNode<IMessage>>();
+                _rawResultBufferIndex[i] = 0;
+                _messagesResultBufferIndex[i] = 0;
+            }
+
+            for (var i = 0; i < ReceivedMessagesBufferSize; i++)
+                _receivedMessages[i] = new ClientMessageNode<byte[]>();
         }
 
         public Task Start()
@@ -57,78 +98,259 @@ namespace SimpleMessageBus.Client
             {
                 var k = i;
                 tasks.Add(Task.Run(() => SerializationWorker(k)));
+                // tasks.Add(Task.Run(() => CombinedWorker(k)));
+            }
+
+            for (var i = 0; i < ReceivedWorkersAmount; i++)
+            {
+                var k = i;
+                tasks.Add(Task.Run(() => ReceivedMessagesWorker(k)));
             }
 
             tasks.Add(Task.Run(ShowWorkersHit));
+            tasks.Add(Task.Run(async () =>
+            {
+                while (true)
+                {
+                    _receivedMessagesControl.Set();
+                    _serializationWorkersControl.Set();
+                    _rawMessagesControl.Set();
+
+                    await Task.Delay(1000);
+                }
+            }));
             tasks.Add(Task.Run(RawTcpMessagesWorker));
 
             return Task.WhenAny(tasks);
         }
+        
+        public void AddBinding(Type type, ushort messageClassId)
+        {
+            _messageBinding.Add(type, messageClassId);
+        }
 
-        public void AddMessage(IMessage message)
+        public void AddMessage(IMessage message, ushort messageClassId)
         {
             _unserializedMessagesBackpressure.Wait();
 
             lock (_unserializedMessagesLock)
             {
-                _unserializedMessages.Span[_unserializedMessagesIndex].Content = message;
-                _unserializedMessagesIndex++;
+                _unserializedMessages[_unserializedMessagesIndex].Content = message;
+                _unserializedMessages[_unserializedMessagesIndex++].MessageClassId = messageClassId;
+
+                if (_unserializedMessagesIndex == 100)
+                    _serializationWorkersControl.Set();
             }
         }
 
-        public void AddRawMessage(MessageType messageType, string content)
+        public void AddRawMessage(MessageType messageType, string content, ushort messageClassId, int messageId,
+            ushort timerIndex)
         {
             _rawMessagesBackpressure.Wait();
 
             lock (_rawMessagesBufferLock)
             {
-                _rawMessagesBuffer.Span[_rawMessagesBufferIndex].Content = content;
-                _rawMessagesBuffer.Span[_rawMessagesBufferIndex].MessageType = messageType;
+                _rawMessagesBuffer[_rawMessagesBufferIndex].Content = content;
+                _rawMessagesBuffer[_rawMessagesBufferIndex].MessageType = messageType;
+                _rawMessagesBuffer[_rawMessagesBufferIndex].MessageClassId = messageClassId;
+                _rawMessagesBuffer[_rawMessagesBufferIndex].MessageId = messageId;
+                _rawMessagesBuffer[_rawMessagesBufferIndex].TimerIndex = timerIndex;
                 _rawMessagesBufferIndex++;
             }
         }
 
-        private void SerializationWorker(int worker)
+        public void AddReceivedMessage(byte[] message, ushort messageClass, int messageId, ushort timerIndex)
+        {
+            _receivedMessagesBackpressure.Wait();
+
+            lock (_receivedMessagesLock)
+            {
+                _receivedMessages[_receivedMessagesIndex].Content = message;
+                _receivedMessages[_receivedMessagesIndex].MessageClassId = messageClass;
+                _receivedMessages[_receivedMessagesIndex].MessageId = messageId;
+                _receivedMessages[_receivedMessagesIndex].TimerIndex = timerIndex;
+                _receivedMessagesIndex++;
+
+                if (_receivedMessagesIndex == 100)
+                    _receivedMessagesControl.Set();
+            }
+        }
+
+        private void SerializationWorker(int workerId)
         {
             try
             {
                 while (true)
                 {
-                    Span<MessageNode<IMessage>> chunk;
-
-                    SpinWait.SpinUntil(() => _unserializedMessagesIndex > 0);
+                    _serializationWorkersControl.WaitOne();
 
                     int resultBufferIndex;
+                    ClientMessageNode<IMessage>[] chunk;
 
                     lock (_unserializedMessagesLock)
                     {
                         if (_unserializedMessagesIndex == 0)
                             continue;
 
-                        chunk = new Span<MessageNode<IMessage>>(new MessageNode<IMessage>[_unserializedMessagesIndex]);
-
-                        _unserializedMessages.Span[.._unserializedMessagesIndex].CopyTo(chunk);
+                        chunk = _unserializedMessages[.._unserializedMessagesIndex];
                         _unserializedMessagesIndex = 0;
-
                         resultBufferIndex = ReadyToSendBuffer.ReserveBufferIndex();
                     }
 
                     if (chunk.Length == 0)
                         continue;
 
-                    using var ms = new MemoryStream();
+                    var ms = _workersStreams[workerId];
 
                     foreach (var message in chunk)
                     {
-                        ms.Write(MessageConfig.CreateTcpHeader(MessageType.Message, 0));
+                        ms.Write(MessageConfig.CreateTcpHeader(MessageType.Message,
+                            message.MessageClassId,
+                            message.MessageId, 0));
                         Serializer.Serialize(ms, message.Content);
-                        ms.Write(MessageConfig.Delimiter);
 
-                        _shardedCounter.Increase(1);
+                        ms.Write(MessageConfig.Delimiter);
                     }
 
-                    ReadyToSendBuffer.Set(resultBufferIndex, ms.GetBuffer()[..(int) ms.Position]);
+                    Interlocked.Add(ref _messagesRpsCounter, chunk.Length);
+                    ReadyToSendBuffer.Set(resultBufferIndex, ms.GetBuffer()[..(int)ms.Position]);
+
                     _unserializedMessagesBackpressure.Release(chunk.Length);
+
+                    ms.Position = 0;
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
+        }
+
+        private Task CombinedWorker(int workerId)
+        {
+            try
+            {
+                while (true)
+                {
+                    _serializationWorkersControl.WaitOne();
+
+                    lock (_rawMessagesBufferLock)
+                    {
+                        if (_rawMessagesBufferIndex > 0)
+                        {
+                            _rawChunk[workerId] = _rawMessagesBuffer[.._rawMessagesBufferIndex];
+                            _rawMessagesBufferIndex = 0;
+                            _rawResultBufferIndex[workerId] = ReadyToSendBuffer.ReserveBufferIndex();
+                        }
+                    }
+
+                    lock (_unserializedMessagesLock)
+                    {
+                        if (_unserializedMessagesIndex > 0)
+                        {
+                            _messagesChunk[workerId] = _unserializedMessages[.._unserializedMessagesIndex];
+                            _unserializedMessagesIndex = 0;
+                            _messagesResultBufferIndex[workerId] = ReadyToSendBuffer.ReserveBufferIndex();
+                        }
+                    }
+
+                    var ms = _workersStreams[workerId];
+
+                    if (_rawChunk[workerId].Length > 0)
+                    {
+                        foreach (var message in _rawChunk[workerId])
+                        {
+                            ms.Write(MessageConfig.CreateTcpHeader(message.MessageType, message.MessageClassId,
+                                message.MessageId, message.TimerIndex));
+
+                            if (message.Content != null)
+                                ms.Write(message.Content.ToBytes());
+
+                            ms.Write(MessageConfig.Delimiter);
+                        }
+
+                        ReadyToSendBuffer.Set(_rawResultBufferIndex[workerId], ms.ToArray());
+                        _rawMessagesBackpressure.Release(_rawChunk[workerId].Length);
+
+                        ms.SetLength(0);
+                    }
+
+                    _rawChunk[workerId] = Array.Empty<ClientMessageNode<string>>();
+
+                    if (_messagesChunk[workerId].Length <= 0)
+                        continue;
+
+                    foreach (var message in _messagesChunk[workerId])
+                    {
+                        ms.Write(MessageConfig.CreateTcpHeader(MessageType.Message, message.MessageClassId,
+                            message.MessageId, 0));
+                        Serializer.Serialize(ms, message.Content);
+                        ms.Write(MessageConfig.Delimiter);
+                    }
+
+                    Interlocked.Add(ref _messagesRpsCounter, _messagesChunk[workerId].Length);
+
+                    ReadyToSendBuffer.Set(_messagesResultBufferIndex[workerId], ms.ToArray());
+                    _unserializedMessagesBackpressure.Release(_messagesChunk[workerId].Length);
+                    _messagesChunk[workerId] = Array.Empty<ClientMessageNode<IMessage>>();
+
+                    ms.SetLength(0);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
+        }
+
+        private Task ReceivedMessagesWorker(int workerId)
+        {
+            try
+            {
+                while (true)
+                {
+                    _receivedMessagesControl.WaitOne();
+
+                    ClientMessageNode<byte[]>[] messages;
+                    int readyIndex;
+
+                    lock (_receivedMessagesLock)
+                    {
+                        if (_receivedMessagesIndex == 0)
+                            continue;
+
+                        messages = _receivedMessages[.._receivedMessagesIndex];
+                        _receivedMessagesIndex = 0;
+                        readyIndex = ReadyToReceive.ReserveBufferIndex();
+                    }
+
+                    if (messages.Length == 0)
+                        continue;
+
+                    var result = new ClientMessageNode<IMessage>[messages.Length];
+                    var resultIndex = 0;
+
+                    foreach (var message in messages)
+                    {
+                        foreach (var (classType, messageClassId) in _messageBinding)
+                        {
+                            if (messageClassId != message.MessageClassId)
+                                continue;
+
+                            // TODO, try to reuse memoryStream and check performance
+                            result[resultIndex].Content = message.Content.Deserialize(classType);
+                            result[resultIndex].MessageClassId = messageClassId;
+                            result[resultIndex].MessageId = message.MessageId;
+                            result[resultIndex].TimerIndex = message.TimerIndex;
+                            resultIndex++;
+                        }
+                    }
+
+                    Interlocked.Add(ref _receivedRpsCounter, messages.Length);
+                    ReadyToReceive.Set(readyIndex, result);
+                    _receivedMessagesBackpressure.Release(messages.Length);
                 }
             }
             catch (Exception e)
@@ -144,20 +366,17 @@ namespace SimpleMessageBus.Client
             {
                 while (true)
                 {
-                    Span<MessageNode<string>> chunk;
-
-                    SpinWait.SpinUntil(() => _rawMessagesBufferIndex > 0);
-
+                    ClientMessageNode<string>[] chunk;
                     int resultBufferIndex;
+
+                    _rawMessagesControl.WaitOne();
 
                     lock (_rawMessagesBufferLock)
                     {
                         if (_rawMessagesBufferIndex == 0)
                             continue;
 
-                        chunk = new Span<MessageNode<string>>(new MessageNode<string>[_rawMessagesBufferIndex]);
-
-                        _rawMessagesBuffer.Span[.._rawMessagesBufferIndex].CopyTo(chunk);
+                        chunk = _rawMessagesBuffer[.._rawMessagesBufferIndex];
                         _rawMessagesBufferIndex = 0;
 
                         resultBufferIndex = ReadyToSendBuffer.ReserveBufferIndex();
@@ -170,14 +389,16 @@ namespace SimpleMessageBus.Client
 
                     foreach (var message in chunk)
                     {
-                        ms.Write(MessageConfig.CreateTcpHeader(message.MessageType, 0));
-                        ms.Write(message.Content.ToBytes());
-                        ms.Write(MessageConfig.Delimiter);
+                        ms.Write(MessageConfig.CreateTcpHeader(message.MessageType, message.MessageClassId,
+                            message.MessageId, message.TimerIndex));
 
-                        Interlocked.Increment(ref _rawMessagesRpsCounter);
+                        if (message.Content != null)
+                            ms.Write(message.Content.ToBytes());
+
+                        ms.Write(MessageConfig.Delimiter);
                     }
 
-                    ReadyToSendBuffer.Set(resultBufferIndex, ms.GetBuffer()[..(int) ms.Position]);
+                    ReadyToSendBuffer.Set(resultBufferIndex, ms.ToArray());
                     _rawMessagesBackpressure.Release(chunk.Length);
                 }
             }
@@ -196,10 +417,12 @@ namespace SimpleMessageBus.Client
                 {
                     await Task.Delay(1000);
 
-                    Console.WriteLine($"RPS: {_shardedCounter.Count}");
-                    Console.WriteLine($"RPS raw: {_rawMessagesRpsCounter}");
-                    _shardedCounter.Decrease(_shardedCounter.Count);
-                    Interlocked.Exchange(ref _rawMessagesRpsCounter, 0);
+                    Console.WriteLine($"RPS send: {_messagesRpsCounter:#,##0.##}");
+                    Interlocked.Exchange(ref _messagesRpsCounter, 0);
+                    Console.WriteLine($"RPS received: {_receivedRpsCounter:#,##0.##}");
+                    Interlocked.Exchange(ref _receivedRpsCounter, 0);
+
+                    Console.WriteLine();
                 }
             }
             catch (Exception e)
@@ -207,12 +430,6 @@ namespace SimpleMessageBus.Client
                 Console.WriteLine(e);
                 throw;
             }
-        }
-
-        public void Dispose()
-        {
-            _unserializedMessagesBackpressure?.Dispose();
-            _rawMessagesBackpressure?.Dispose();
         }
     }
 }

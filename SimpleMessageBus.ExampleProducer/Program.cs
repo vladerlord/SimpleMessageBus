@@ -6,15 +6,14 @@ using SimpleMessageBus.Client;
 
 namespace SimpleMessageBus.ExampleProducer
 {
-    class Program
+    public class Program
     {
-        static async Task Main(string[] args)
+        public static async Task Main()
         {
-            // Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.RealTime;
-            await GetProducer();
+            await Produce();
         }
 
-        private static async Task GetProducer()
+        private static async Task Produce()
         {
             const string ip = "127.0.0.1";
             const int port = 8888;
@@ -22,38 +21,42 @@ namespace SimpleMessageBus.ExampleProducer
             Console.WriteLine($"Producer is running on {ip}:{port}");
 
             var client = new TcpMessageBusClient(ip, port);
+            client.AddBinding(typeof(PersonMessage), 1);
+
             var tasks = new List<Task>();
+
+            // var client1 = new TcpMessageBusClient(ip, 8888);
+            // client1.Subscribe((PersonMessage personMessage) =>
+            // {
+            //     Console.WriteLine($"[consumer1] Id: {personMessage.Id}");
+            // });
+            // tasks.Add(Task.Run(() => client1.StartAsync()));
+
+            var idCounter = -1;
+
+            client.Subscribe((PersonMessage personMessage) =>
+            {
+                // Console.WriteLine($"Person message: {personMessage.Id}");
+                // if (personMessage.Id != ++idCounter)
+                //     throw new Exception($"Wrong order. Must be: {idCounter} is {personMessage.Id}");
+            });
 
             tasks.Add(Task.Run(() => client.StartAsync()));
             tasks.Add(Task.Run(() =>
             {
-                for (var i = 0; i < 40_000_000; i++)
+                for (var i = 0; i < 50_000_000; i++)
                 {
                     client.Send(new PersonMessage
                     {
                         Id = i,
-                        Name = $"name{i}"
+                        Name = $"name{i}\r\n"
                     });
                 }
-            }));
-            var counter = 0;
 
-            tasks.Add(Task.Run(async () =>
-            {
-                for (var i = 0u; i < 40_000_000; i++)
-                {
-                    client.AcknowledgeMessage(i);
-
-                    if (++counter >= 6_500)
-                    {
-                        await Task.Delay(3);
-                        counter = 0;
-                    }
-                }
+                Console.WriteLine("END OF MESSAGES");
             }));
 
-
-            await Task.WhenAny(tasks);
+            await Task.WhenAll(tasks);
         }
     }
 }

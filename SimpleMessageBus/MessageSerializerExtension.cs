@@ -23,11 +23,11 @@ namespace SimpleMessageBus
             return Serializer.Deserialize<T>(ms);
         }
 
-        public static ISerializable Deserialize(this byte[] content, Type type)
+        public static IMessage Deserialize(this byte[] content, Type type)
         {
             using var ms = new MemoryStream(content);
 
-            return (ISerializable) Serializer.NonGeneric.Deserialize(type, ms);
+            return (IMessage) Serializer.NonGeneric.Deserialize(type, ms);
         }
     }
 }

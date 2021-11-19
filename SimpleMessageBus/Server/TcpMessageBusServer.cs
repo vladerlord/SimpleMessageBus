@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
+using SimpleMessageBus.Utils;
 
 namespace SimpleMessageBus.Server
 {
@@ -11,14 +13,21 @@ namespace SimpleMessageBus.Server
     {
         private readonly TcpListener _listener;
         private readonly Dictionary<int, TcpMessageBusSession> _tcpSessions = new();
+        private readonly object _tcpSessionsLock = new();
         private int _tcpSessionIdIndex;
 
         private readonly List<Task> _tasks = new();
         private readonly TcpMessageBusBandwidth _bandwidthInfo = new();
+        private readonly ServerMessageManager _serverMessageManager;
+        private readonly ServerAckManager _ackManager;
+
+        private const int GroupSize = 100;
 
         public TcpMessageBusServer(string ip, int port)
         {
             _listener = new TcpListener(IPAddress.Parse(ip), port);
+            _serverMessageManager = ServerMessageManager.GetInstance();
+            _ackManager = ServerAckManager.Instance;
         }
 
         public async Task StartAsync()
@@ -29,10 +38,36 @@ namespace SimpleMessageBus.Server
             {
                 _listener.Start();
 
-                _tasks.Add(ListenForConnectionsAsync());
-                _tasks.Add(ShowBandwidthInfoAsync());
+                _tasks.Add(Task.Run(Timer));
+                _tasks.Add(Task.Run(ListenForConnectionsAsync));
+                _tasks.Add(Task.Run(PrepareSessionMessagesWorker));
 
-                await Task.WhenAny(_tasks);
+                await Task.WhenAll(_tasks);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
+        }
+
+        private async Task Timer()
+        {
+            try
+            {
+                var sw = new Stopwatch();
+
+                while (true)
+                {
+                    sw.Start();
+
+                    // todo, split?
+                    ShowBandwidthInfoAsync();
+                    _ackManager.TimerTick();
+
+                    await Task.Delay(1000 - sw.Elapsed.Milliseconds);
+                    sw.Reset();
+                }
             }
             catch (Exception e)
             {
@@ -51,9 +86,12 @@ namespace SimpleMessageBus.Server
                     var sessionId = _tcpSessionIdIndex++;
                     var session = new TcpMessageBusSession(this, sessionId, socket);
 
-                    _tcpSessions.Add(sessionId, session);
+                    lock (_tcpSessionsLock)
+                        _tcpSessions.Add(sessionId, session);
 
-                    _tasks.Add(session.StartAsync());
+                    _tasks.Add(Task.Run(() => session.StartAsync()));
+
+                    SessionCreated(sessionId);
                 }
             }
             catch (Exception e)
@@ -63,53 +101,92 @@ namespace SimpleMessageBus.Server
             }
         }
 
-        public void Disconnect(int sessionId)
+        private Task PrepareSessionMessagesWorker()
         {
-            _tcpSessions[sessionId].Dispose();
-            Console.WriteLine($"Session: {sessionId} is disconnected");
+            try
+            {
+                while (true)
+                {
+                    var messageClassesIds = _serverMessageManager.GetMessageClassesIds();
+
+                    lock (_tcpSessionsLock)
+                    {
+                        for (var i = 0; i < messageClassesIds.Count; i++)
+                        {
+                            var messageClassId = messageClassesIds[i];
+                            var tickCounter = 0;
+
+                            // TODO, try to replace with autoResetEvent
+                            SpinWait.SpinUntil(() =>
+                                tickCounter++ == 1000 || _serverMessageManager.GetLength(messageClassId) > GroupSize);
+
+                            var subscribedIds = _serverMessageManager.GetSubscribedSessionsIds(messageClassId);
+
+                            if (subscribedIds == null || subscribedIds.Count == 0)
+                                continue;
+
+                            var buffer = _serverMessageManager.TakeMaxItems(messageClassId, subscribedIds);
+                            Interlocked.Add(ref _bandwidthInfo.SentMessages, buffer.Length);
+
+                            foreach (var sessionId in subscribedIds)
+                            {
+                                var enumerator = _serverMessageManager.GetUnAckedMessages(messageClassId, sessionId);
+
+                                foreach (var undelivered in enumerator)
+                                    _tcpSessions[sessionId].AddMessage(undelivered.Flatten());
+
+                                _tcpSessions[sessionId].AddMessage(buffer.Flatten());
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
         }
 
-        private async Task ShowBandwidthInfoAsync()
+        private void SessionCreated(int sessionId)
         {
-            while (true)
+            _ackManager.AddSessionId(sessionId);
+        }
+
+        public void Disconnect(int sessionId)
+        {
+            lock (_tcpSessionsLock)
             {
-                var startTime = DateTime.UtcNow;
-                var startCpuUsage = Process.GetCurrentProcess().TotalProcessorTime;
-
-                await Task.Delay(1000);
-
-                CollectClientsBandwidthInfo();
-
-                if (_bandwidthInfo.ReadMessages == 0 &&
-                    _bandwidthInfo.SentMessages == 0)
-                    continue;
-
-                if (_bandwidthInfo.ReadBytes == 0 &&
-                    _bandwidthInfo.SentBytes == 0)
-                    continue;
-
-                var endTime = DateTime.UtcNow;
-                var endCpuUsage = Process.GetCurrentProcess().TotalProcessorTime;
-                var cpuUsedMs = (endCpuUsage - startCpuUsage).TotalMilliseconds;
-                var totalMsPassed = (endTime - startTime).TotalMilliseconds;
-                var cpuUsageTotal = cpuUsedMs / (Environment.ProcessorCount * totalMsPassed);
-                var memory = Process.GetCurrentProcess().WorkingSet64;
-
-                Console.WriteLine($"-- Total RPS: {_bandwidthInfo.ReadMessages:N0}");
-                Console.WriteLine($"-- CPU USAGE: {cpuUsageTotal * 100}");
-                Console.WriteLine($"-- MEMORY USAGE: {memory}");
-                Console.WriteLine();
-
-                _bandwidthInfo.Reset();
+                _tcpSessions.Remove(sessionId);
+                _serverMessageManager.RemoveSessionId(sessionId);
             }
+
+            _ackManager.RemoveSessionId(sessionId);
+
+            Console.WriteLine($"[] Session: {sessionId} is disconnected");
+        }
+
+        private void ShowBandwidthInfoAsync()
+        {
+            CollectClientsBandwidthInfo();
+
+            Console.WriteLine($"-- Read RPS: {_bandwidthInfo.ReadMessages:N0}");
+            Console.WriteLine($"-- Sent RPS: {_bandwidthInfo.SentMessages:N0}");
+
+            Console.WriteLine();
+
+            _bandwidthInfo.Reset();
         }
 
         private void CollectClientsBandwidthInfo()
         {
-            foreach (var (id, client) in _tcpSessions)
+            lock (_tcpSessionsLock)
             {
-                _bandwidthInfo.Add(client.BandwidthInfo);
-                client.BandwidthInfo.Reset();
+                foreach (var (_, client) in _tcpSessions)
+                {
+                    _bandwidthInfo.Add(client.BandwidthInfo);
+                    client.BandwidthInfo.Reset();
+                }
             }
         }
     }

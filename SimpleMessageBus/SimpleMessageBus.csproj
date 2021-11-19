@@ -5,20 +5,21 @@
     </PropertyGroup>
 
     <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
-      <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
     <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
-      <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\SimpleMessageBus.Abstractions\SimpleMessageBus.Abstractions.csproj" />
+        <ProjectReference Include="..\SimpleMessageBus.Abstractions\SimpleMessageBus.Abstractions.csproj"/>
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="System.Diagnostics.Process" Version="4.3.0" />
-      <PackageReference Include="System.IO.Pipelines" Version="6.0.0-preview.2.21154.6" />
+        <PackageReference Include="System.IO.Pipelines" Version="6.0.0-preview.2.21154.6"/>
+        <PackageReference Include="protobuf-net" Version="3.0.101"/>
+        <PackageReference Include="protobuf-net.Core" Version="3.0.101"/>
     </ItemGroup>
 
 </Project>

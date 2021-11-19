@@ -1,12 +1,13 @@
 ﻿using System;
 using System.Net;
+using System.Threading.Tasks;
 using SimpleMessageBus.Server;
 
-namespace SimpleMessageBus.Example
+namespace SimpleMessageBus.ExampleServer
 {
     class Program
     {
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             var port = 8888;
             var ipEndPoint = new IPEndPoint(IPAddress.Any, port);
@@ -15,8 +16,8 @@ namespace SimpleMessageBus.Example
             var server = new TcpMessageBusServer(ip, port);
             
             Console.WriteLine($"Message bus is running on {ip}:{port}");
-            
-            server.StartAsync().Wait();
+
+            await server.StartAsync();
         }
     }
 }

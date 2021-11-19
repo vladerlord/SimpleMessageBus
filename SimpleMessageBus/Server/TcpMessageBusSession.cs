@@ -1,8 +1,8 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.IO.Pipelines;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
 using SimpleMessageBus.Abstractions;
 using SimpleMessageBus.Buffers;
@@ -10,7 +10,7 @@ using SimpleMessageBus.Utils;
 
 namespace SimpleMessageBus.Server
 {
-    public class TcpMessageBusSession : IDisposable
+    public class TcpMessageBusSession : TcpSocket
     {
         private readonly Socket _socket;
         private readonly NetworkStream _stream;
@@ -19,7 +19,8 @@ namespace SimpleMessageBus.Server
 
         public TcpMessageBusBandwidth BandwidthInfo { get; } = new();
         private readonly ServerMessageManager _serverMessageManager;
-        private readonly BoundedSingleThreadBlockingArrayBuffer<MessageNode> _messageBuffer = new(1000);
+
+        private readonly BoundedAllocatingBlockingBuffer<byte[]> _messageBuffer = new(2_000_000);
 
         private readonly List<Task> _tasks = new();
 
@@ -38,10 +39,9 @@ namespace SimpleMessageBus.Server
 
             try
             {
-                _tasks.Add(FillPipeAsync(_socket, pipe.Writer));
+                _tasks.Add(Task.Run(() => FillPipeAsync(_socket, pipe.Writer)));
                 _tasks.Add(Task.Run(() => ReadPipeAsync(pipe.Reader)));
                 _tasks.Add(Task.Run(WriteBulk));
-                _tasks.Add(Ping());
 
                 await Task.WhenAny(_tasks);
             }
@@ -55,106 +55,39 @@ namespace SimpleMessageBus.Server
             }
         }
 
-        private static async Task FillPipeAsync(Socket socket, PipeWriter writer)
+        protected override void OnMessageReceived(byte[] message)
         {
             try
             {
-                const int minimumBufferSize = 100;
-
-                while (true)
-                {
-                    var memory = writer.GetMemory(minimumBufferSize);
-                    var bytesRead = await socket.ReceiveAsync(memory, SocketFlags.None);
-
-                    if (bytesRead == 0)
-                        break;
-
-                    writer.Advance(bytesRead);
-
-                    await writer.FlushAsync();
-                }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e);
-                throw;
-            }
-        }
-
-        private async Task ReadPipeAsync(PipeReader reader)
-        {
-            try
-            {
-                while (true)
-                {
-                    var result = await reader.ReadAsync();
-                    var buffer = result.Buffer;
-
-                    while (TryReadLine(ref buffer, out var line))
-                        OnMessageReceived(line.ToArray());
-
-                    reader.AdvanceTo(buffer.Start, buffer.End);
-                }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e);
-                throw;
-            }
-        }
-
-        private static bool TryReadLine(ref ReadOnlySequence<byte> buffer, out ReadOnlySequence<byte> line)
-        {
-            var position = buffer.GetDelimiterPosition();
-
-            if (position == null)
-            {
-                line = default;
-                return false;
-            }
-
-            line = buffer.Slice(0, position.Value);
-            buffer = buffer.Slice(position.Value + MessageConfig.DelimiterLength);
-
-            return true;
-        }
-
-        private static int lastid = -1;
-        private static bool check;
-
-        private void OnMessageReceived(byte[] message)
-        {
-            // BandwidthInfo.ReadBytes += message.Length;
-            // BandwidthInfo.ReadMessages++;
-
-            try
-            {
-                message.DecodeMessage(out var type, out var messageClass);
-                message = message.GetWithoutProtocol();
+                message.DecodeMessage(out var type, out var messageClassId, out var messageId, out var timerIndex);
 
                 switch (type)
                 {
                     case MessageType.Heartbeat:
                         break;
                     case MessageType.Message:
-                        // var personMessage = message.Deserialize<PersonMessage>();
-
-                        // _serverMessageManager.AddMessage(message, messageClass, channel);
-
-                        // if (personMessage.Id != ++lastid && !check)
-                        // {
-                        //     Console.WriteLine($"Should be: {lastid}, is: {personMessage.Id}");
-                        //     check = true;
-                        // }
-
-                        BandwidthInfo.ReadBytes += message.Length;
-                        BandwidthInfo.ReadMessages++;
+                        _serverMessageManager.AddMessage(message, messageClassId);
+                        Interlocked.Increment(ref BandwidthInfo.ReadMessages);
 
                         break;
                     case MessageType.Subscribe:
+                        _serverMessageManager.Subscribe(messageClassId, _sessionId);
+
                         break;
                     case MessageType.Ack:
-                        // Console.WriteLine(message.GetString());
+                        message = message.GetWithoutProtocol();
+                        var ids = message.GetString().Split("-");
+
+                        _serverMessageManager.Acknowledge(
+                            (int.Parse(ids[0]), int.Parse(ids[1])),
+                            messageClassId,
+                            _sessionId,
+                            timerIndex
+                        );
+
+                        break;
+                    case MessageType.Connect:
+                        // todo, deserialize connect message, extract message classes ids binding
 
                         break;
                     default:
@@ -174,15 +107,10 @@ namespace SimpleMessageBus.Server
             {
                 while (true)
                 {
-                    var toSend = _messageBuffer.TakeMaxItems().ToArray();
+                    var toSend = _messageBuffer.TakeMaxItems();
 
-                    foreach (var message in toSend)
-                    {
-                        await _stream.WriteAsync(MessageConfig.CreateTcpHeader(message.MessageType,
-                            message.MessageClass));
-                        await _stream.WriteAsync(message.Content);
-                        await _stream.WriteAsync(MessageConfig.Delimiter);
-                    }
+                    foreach (var bytes in toSend)
+                        await _stream.WriteAsync(bytes);
                 }
             }
             catch (Exception e)
@@ -192,24 +120,9 @@ namespace SimpleMessageBus.Server
             }
         }
 
-        private async Task Ping()
+        public void AddMessage(byte[] message)
         {
-            while (true)
-            {
-                await Task.Delay(1000);
-
-                _messageBuffer.Add(new MessageNode()
-                {
-                    MessageType = MessageType.Heartbeat,
-                    Content = "PING".ToBytes(),
-                });
-            }
-        }
-
-        public void Dispose()
-        {
-            _socket?.Dispose();
-            _stream?.Dispose();
+            _messageBuffer.Add(message);
         }
     }
 }
