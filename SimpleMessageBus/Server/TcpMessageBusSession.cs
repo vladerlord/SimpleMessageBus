@@ -30,7 +30,7 @@ namespace SimpleMessageBus.Server
             _sessionId = sessionId;
             _socket = socket;
             _stream = new NetworkStream(socket);
-            _serverMessageManager = ServerMessageManager.GetInstance();
+            _serverMessageManager = ServerMessageManager.Instance();
         }
 
         public async Task StartAsync()

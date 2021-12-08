@@ -23,11 +23,14 @@ namespace SimpleMessageBus.Server
 
         private const int GroupSize = 100;
 
-        public TcpMessageBusServer(string ip, int port)
+        public TcpMessageBusServer(string ip, int port, ServerOptions options = null)
         {
+            options ??= new ServerOptions();
+            ServerConfig.LoadOptions(options);
+
             _listener = new TcpListener(IPAddress.Parse(ip), port);
-            _serverMessageManager = ServerMessageManager.GetInstance();
-            _ackManager = ServerAckManager.Instance;
+            _serverMessageManager = ServerMessageManager.Instance();
+            _ackManager = ServerAckManager.Instance();
         }
 
         public async Task StartAsync()
@@ -130,7 +133,10 @@ namespace SimpleMessageBus.Server
 
                             foreach (var sessionId in subscribedIds)
                             {
-                                var enumerator = _serverMessageManager.GetUnAckedMessages(messageClassId, sessionId);
+                                // todo, send unacked once a timeout timer
+                                // because, we can send multiple times undelivered messages
+                                var enumerator =
+                                    _serverMessageManager.GetUndeliveredMessages(messageClassId, sessionId);
 
                                 foreach (var undelivered in enumerator)
                                     _tcpSessions[sessionId].AddMessage(undelivered.Flatten());
@@ -170,9 +176,7 @@ namespace SimpleMessageBus.Server
         {
             CollectClientsBandwidthInfo();
 
-            Console.WriteLine($"-- Read RPS: {_bandwidthInfo.ReadMessages:N0}");
-            Console.WriteLine($"-- Sent RPS: {_bandwidthInfo.SentMessages:N0}");
-
+            Console.WriteLine($"Received: {_bandwidthInfo.ReadMessages:N0}. Send: {_bandwidthInfo.SentMessages:N0}");
             Console.WriteLine();
 
             _bandwidthInfo.Reset();

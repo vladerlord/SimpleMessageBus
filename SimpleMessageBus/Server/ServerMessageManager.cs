@@ -7,6 +7,8 @@ namespace SimpleMessageBus.Server
     public class ServerMessageManager
     {
         private static ServerMessageManager _instance;
+        private static readonly object InstanceLock = new();
+
         private readonly ServerAckManager _ackManager;
 
         // message class id => list of subscribed session ids to that message class id
@@ -17,35 +19,41 @@ namespace SimpleMessageBus.Server
         private readonly List<ushort> _buffersMessageClassIds = new();
         public List<ushort> GetMessageClassesIds() => _buffersMessageClassIds;
 
+        private readonly object _acknowledgeLock = new();
+
         private ServerMessageManager()
         {
-            _ackManager = ServerAckManager.Instance;
+            _ackManager = ServerAckManager.Instance();
 
             // TODO, move to separate protocol message
             // because checking with containsKey in every addMessage is costly
             AddMessageClassId(1);
         }
 
-        public static ServerMessageManager GetInstance()
+        public static ServerMessageManager Instance()
         {
-            // todo, google about multithreading singleton
-            return _instance ??= new ServerMessageManager();
+            if (_instance != null)
+                return _instance;
+
+            lock (InstanceLock)
+                _instance ??= new ServerMessageManager();
+
+            return _instance;
         }
 
-        public void AddMessageClassId(ushort messageClassId)
+        private void AddMessageClassId(ushort messageClassId)
         {
             _buffers.Add(messageClassId, new ServerMessagesBuffer(50_000_000));
             _buffersMessageClassIds.Add(messageClassId);
             _ackManager.AddMessageClassId(messageClassId);
         }
 
-        public IEnumerable<Memory<byte[]>> GetUnAckedMessages(ushort messageClassId, int sessionId)
+        public IEnumerable<Memory<byte[]>> GetUndeliveredMessages(ushort messageClassId, int sessionId)
         {
-            var undeliveredRanges = _ackManager.GetUnAckedIds(messageClassId, sessionId);
+            var undeliveredRanges = _ackManager.GetUndeliveredIds(messageClassId, sessionId);
 
             if (undeliveredRanges == null)
                 yield break;
-
 
             foreach (var undeliveredRange in undeliveredRanges)
                 yield return _buffers[messageClassId].TakeByRangeNode(undeliveredRange);
@@ -68,18 +76,27 @@ namespace SimpleMessageBus.Server
             if (result.Length <= 0)
                 return result;
 
-            _ackManager.AddUnAcked(result, range, messageClassId, sessionsIds[0]);
+            _ackManager.AddUnAcked(result, range, messageClassId, sessionsIds);
 
             return result;
         }
 
         public void Acknowledge((int first, int last) range, ushort messageClassId, int sessionId, ushort timerIndex)
         {
-            // TODO, should be based on ack from sessions
-            for (var i = range.first; i < range.last; i++)
-                _buffers[messageClassId].Acknowledge(i);
+            lock (_acknowledgeLock)
+            {
+                _ackManager.Ack(range, messageClassId, sessionId, timerIndex);
 
-            _ackManager.Ack(range, messageClassId, sessionId, timerIndex);
+                var toRelease = _ackManager.GetReadyForReleaseNodes(range, messageClassId, sessionId, timerIndex);
+
+                foreach (var ackRangeNode in toRelease)
+                {
+#if SERVER_MESSAGE_MANAGER_DEBUG
+                    Console.WriteLine($"=========== releasing from buffer: {ackRangeNode.First}-{ackRangeNode.Last}");
+#endif
+                    _buffers[messageClassId].Acknowledge(ackRangeNode);
+                }
+            }
         }
 
         public void Subscribe(ushort messageClassId, int sessionId)

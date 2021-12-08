@@ -45,7 +45,7 @@ namespace SimpleMessageBus.Server
             // todo, decide how not to lose messages
             // ack on client side?
             // additional endless buffer?
-            if (!SpinWait.SpinUntil(() => _bufferItemsAmount < _bufferSize, 5000))
+            if (!SpinWait.SpinUntil(() => _bufferItemsAmount < _bufferSize, 1_000))
                 return;
 
             lock (_bufferLock)
@@ -139,17 +139,17 @@ namespace SimpleMessageBus.Server
             return result;
         }
 
-        public void Acknowledge(int messageId)
+        public void Acknowledge(AckRangeNode range)
         {
             lock (_bufferLock)
             {
                 // release only when there is no space for new items
-                var shouldRelease = messageId == _acknowledgeTailIndex;
+                var shouldRelease = range.First == _acknowledgeTailIndex;
                 var elementsToRelease = 0;
 
-                for (var i = messageId; i < _bufferSize; i++)
+                for (var i = range.First; i < _bufferSize; i++)
                 {
-                    if (i == messageId)
+                    if (range.First <= i && i < range.Last)
                     {
                         _inUse[i] = false;
                         _hasData[i] = false;

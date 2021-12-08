@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO.Pipelines;
-using System.Linq;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 using SimpleMessageBus.Abstractions;
@@ -24,10 +23,14 @@ namespace SimpleMessageBus.Client
         // messageClassId => consumer callback
         private readonly Dictionary<ushort, Action<IMessage>> _subscribers = new();
 
+        // todo, replace with session id from server by Connect packet
+        private static int _clientIdCounter;
+
         public TcpMessageBusClient(string ip, int port)
         {
+            _clientIdCounter++;
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            _clientMessageManager = new ClientMessageManager();
+            _clientMessageManager = new ClientMessageManager(_clientIdCounter);
             _socket.Connect(ip, port);
             _stream = new NetworkStream(_socket);
 
@@ -127,6 +130,7 @@ namespace SimpleMessageBus.Client
                         foreach (var message in messages)
                         {
                             _subscribers[message.MessageClassId].Invoke(message.Content);
+
                             _messageAcknowledgementManager.AcknowledgeMessage(message.MessageClassId,
                                 message.MessageId, message.TimerIndex);
                         }

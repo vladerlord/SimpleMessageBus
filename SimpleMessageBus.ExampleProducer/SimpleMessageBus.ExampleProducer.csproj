@@ -6,7 +6,6 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\SimpleMessageBus.ExampleAbstractions\SimpleMessageBus.ExampleAbstractions.csproj" />
       <ProjectReference Include="..\SimpleMessageBus\SimpleMessageBus.csproj" />
     </ItemGroup>
 

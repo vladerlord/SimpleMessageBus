@@ -62,9 +62,11 @@ namespace SimpleMessageBus.Client
 
         private int _messagesRpsCounter;
         private int _receivedRpsCounter;
+        private readonly int _clientId;
 
-        public ClientMessageManager()
+        public ClientMessageManager(int clientId)
         {
+            _clientId = clientId;
             ReadyToReceive = new ReservationCircularBlockingBuffer<ClientMessageNode<IMessage>[]>(10_000_000);
 
             _unserializedMessages = new ClientMessageNode<IMessage>[UnserializedMessagesBufferSize];
@@ -116,14 +118,14 @@ namespace SimpleMessageBus.Client
                     _serializationWorkersControl.Set();
                     _rawMessagesControl.Set();
 
-                    await Task.Delay(1000);
+                    await Task.Delay(500);
                 }
             }));
             tasks.Add(Task.Run(RawTcpMessagesWorker));
 
             return Task.WhenAny(tasks);
         }
-        
+
         public void AddBinding(Type type, ushort messageClassId)
         {
             _messageBinding.Add(type, messageClassId);
@@ -156,6 +158,9 @@ namespace SimpleMessageBus.Client
                 _rawMessagesBuffer[_rawMessagesBufferIndex].MessageId = messageId;
                 _rawMessagesBuffer[_rawMessagesBufferIndex].TimerIndex = timerIndex;
                 _rawMessagesBufferIndex++;
+
+                if (messageType == MessageType.Subscribe)
+                    _rawMessagesControl.Set();
             }
         }
 
@@ -305,7 +310,7 @@ namespace SimpleMessageBus.Client
             }
         }
 
-        private Task ReceivedMessagesWorker(int workerId)
+        private async Task ReceivedMessagesWorker(int workerId)
         {
             try
             {
@@ -332,6 +337,8 @@ namespace SimpleMessageBus.Client
                     var result = new ClientMessageNode<IMessage>[messages.Length];
                     var resultIndex = 0;
 
+                    await using var ms = new MemoryStream();
+
                     foreach (var message in messages)
                     {
                         foreach (var (classType, messageClassId) in _messageBinding)
@@ -339,12 +346,16 @@ namespace SimpleMessageBus.Client
                             if (messageClassId != message.MessageClassId)
                                 continue;
 
-                            // TODO, try to reuse memoryStream and check performance
-                            result[resultIndex].Content = message.Content.Deserialize(classType);
+                            await ms.WriteAsync(message.Content);
+                            ms.Position = 0;
+
+                            result[resultIndex].Content = (IMessage)Serializer.NonGeneric.Deserialize(classType, ms);
                             result[resultIndex].MessageClassId = messageClassId;
                             result[resultIndex].MessageId = message.MessageId;
                             result[resultIndex].TimerIndex = message.TimerIndex;
                             resultIndex++;
+
+                            ms.SetLength(0);
                         }
                     }
 
@@ -417,12 +428,10 @@ namespace SimpleMessageBus.Client
                 {
                     await Task.Delay(1000);
 
-                    Console.WriteLine($"RPS send: {_messagesRpsCounter:#,##0.##}");
+                    Console.WriteLine(
+                        $"[{_clientId}] Sent: {_messagesRpsCounter:#,##0.##}. Received: {_receivedRpsCounter:#,##0.##}");
                     Interlocked.Exchange(ref _messagesRpsCounter, 0);
-                    Console.WriteLine($"RPS received: {_receivedRpsCounter:#,##0.##}");
                     Interlocked.Exchange(ref _receivedRpsCounter, 0);
-
-                    Console.WriteLine();
                 }
             }
             catch (Exception e)

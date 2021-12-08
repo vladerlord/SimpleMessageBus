@@ -1,6 +1,24 @@
 ﻿<wpf:ResourceDictionary xml:space="preserve" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:s="clr-namespace:System;assembly=mscorlib" xmlns:ss="urn:shemas-jetbrains-com:settings-storage-xaml" xmlns:wpf="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
 	<s:String x:Key="/Default/Environment/Hierarchy/Build/BuildTool/DotNetCliExePath/@EntryValue">/usr/local/share/dotnet/dotnet</s:String>
-	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=fa6c41f1_002Dadc8_002D41b4_002D9d02_002De931e876c4b9/@EntryIndexedValue">&lt;SessionState ContinuousTestingIsOn="True" ContinuousTestingMode="1" IsActive="True" Name="Tests" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;
+	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=3179c184_002Df0dd_002D4a49_002Da1d7_002D4802a3944882/@EntryIndexedValue">&lt;SessionState ContinuousTestingMode="0" IsActive="True" Name="Test1" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;
+  &lt;Or&gt;
+    &lt;And&gt;
+      &lt;TestAncestor&gt;
+        &lt;TestId&gt;NUnit3x::F1EEEDE1-D03A-4363-8C9F-F153133CC3FD::net5.0::SimpleMessageBus.Tests.Tests&lt;/TestId&gt;
+      &lt;/TestAncestor&gt;
+      &lt;Not&gt;
+        &lt;TestAncestor&gt;
+          &lt;TestId&gt;NUnit3x::F1EEEDE1-D03A-4363-8C9F-F153133CC3FD::net5.0::SimpleMessageBus.Tests.Tests.Test3&lt;/TestId&gt;
+        &lt;/TestAncestor&gt;
+      &lt;/Not&gt;
+    &lt;/And&gt;
+    &lt;TestAncestor&gt;
+      &lt;TestId&gt;NUnit3x::F1EEEDE1-D03A-4363-8C9F-F153133CC3FD::net5.0::SimpleMessageBus.Tests.Tests.Test3&lt;/TestId&gt;
+      &lt;TestId&gt;NUnit3x::F1EEEDE1-D03A-4363-8C9F-F153133CC3FD::net5.0::SimpleMessageBus.Tests.MessageAcknowledgementManagerTest.GroupMessagesIdsIntoRangesTest&lt;/TestId&gt;
+    &lt;/TestAncestor&gt;
+  &lt;/Or&gt;
+&lt;/SessionState&gt;</s:String>
+	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=fa6c41f1_002Dadc8_002D41b4_002D9d02_002De931e876c4b9/@EntryIndexedValue">&lt;SessionState ContinuousTestingIsOn="True" ContinuousTestingMode="1" Name="Tests" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;
   &lt;TestAncestor&gt;
     &lt;TestId&gt;NUnit3x::75FDA632-3E61-4B27-9DD5-AA3477111E4A::net5.0::SimpleMessageBus.Tests.Tests&lt;/TestId&gt;
   &lt;/TestAncestor&gt;
