@@ -1,21 +1,39 @@
 using System;
 using System.Collections.Generic;
 using NUnit.Framework;
+using SimpleMessageBus.Abstractions;
 using SimpleMessageBus.Buffers;
 using SimpleMessageBus.Client;
 
 namespace SimpleMessageBus.Tests
 {
+    internal class MessagesBinding : IMessagesIdsBinding
+    {
+        public Dictionary<Type, ushort> GetMessagesIdsBinding()
+        {
+            return new Dictionary<Type, ushort> { { typeof(MessagesBinding), 1 } };
+        }
+
+        public ushort GetMessageIdByType(Type type)
+        {
+            return 1;
+        }
+
+        public List<ushort> GetMessagesIds()
+        {
+            return new List<ushort> { 1 };
+        }
+    }
+
     public class MessageAcknowledgementManagerTest
     {
         [Test, TestCaseSource(nameof(TestGroupMessagesIdsIntoRangesFixtures))]
         public void GroupMessagesIdsIntoRangesTest(List<int> messageIds, List<AckRangeNode> expected)
         {
             // Arrange
-            var clientMessageManager = new ClientMessageManager(1);
-            var ackManager = new MessageAcknowledgementManager(clientMessageManager);
-
-            ackManager.AddMessageClassId(1);
+            var messagesIdsBinding = new MessagesBinding();
+            var clientMessageManager = new ClientMessageManager(messagesIdsBinding);
+            var ackManager = new MessageAcknowledgementManager(clientMessageManager, messagesIdsBinding);
 
             foreach (var messageId in messageIds)
                 ackManager.AcknowledgeMessage(1, messageId, 0);

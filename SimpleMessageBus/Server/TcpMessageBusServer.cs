@@ -110,23 +110,20 @@ namespace SimpleMessageBus.Server
             {
                 while (true)
                 {
-                    var messageClassesIds = _serverMessageManager.GetMessageClassesIds();
-
                     lock (_tcpSessionsLock)
+                    lock (ServerMessagesIdsBinding.MessageClassIdsLock)
                     {
-                        for (var i = 0; i < messageClassesIds.Count; i++)
+                        foreach (var messageClassId in ServerMessagesIdsBinding.MessageClassIds)
                         {
-                            var messageClassId = messageClassesIds[i];
+                            var subscribedIds = _serverMessageManager.GetSubscribedSessionsIds(messageClassId);
                             var tickCounter = 0;
+
+                            if (subscribedIds == null || subscribedIds.Count == 0)
+                                continue;
 
                             // TODO, try to replace with autoResetEvent
                             SpinWait.SpinUntil(() =>
                                 tickCounter++ == 1000 || _serverMessageManager.GetLength(messageClassId) > GroupSize);
-
-                            var subscribedIds = _serverMessageManager.GetSubscribedSessionsIds(messageClassId);
-
-                            if (subscribedIds == null || subscribedIds.Count == 0)
-                                continue;
 
                             var buffer = _serverMessageManager.TakeMaxItems(messageClassId, subscribedIds);
                             Interlocked.Add(ref _bandwidthInfo.SentMessages, buffer.Length);

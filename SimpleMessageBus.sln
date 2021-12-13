@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SimpleMessageBus.ExamplePro
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SimpleMessageBus.Tests", "SimpleMessageBus.Tests\SimpleMessageBus.Tests.csproj", "{F1EEEDE1-D03A-4363-8C9F-F153133CC3FD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SimpleMessageBus.Shared", "SimpleMessageBus.Shared\SimpleMessageBus.Shared.csproj", "{0C697168-851E-4140-9A5F-05772FE513ED}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -36,5 +38,9 @@ Global
 		{F1EEEDE1-D03A-4363-8C9F-F153133CC3FD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F1EEEDE1-D03A-4363-8C9F-F153133CC3FD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F1EEEDE1-D03A-4363-8C9F-F153133CC3FD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0C697168-851E-4140-9A5F-05772FE513ED}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0C697168-851E-4140-9A5F-05772FE513ED}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0C697168-851E-4140-9A5F-05772FE513ED}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0C697168-851E-4140-9A5F-05772FE513ED}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

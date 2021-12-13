@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace SimpleMessageBus.Server
@@ -16,18 +17,13 @@ namespace SimpleMessageBus.Server
 
         // message class id => message buffer
         private readonly Dictionary<ushort, ServerMessagesBuffer> _buffers = new();
-        private readonly List<ushort> _buffersMessageClassIds = new();
-        public List<ushort> GetMessageClassesIds() => _buffersMessageClassIds;
 
         private readonly object _acknowledgeLock = new();
 
         private ServerMessageManager()
         {
             _ackManager = ServerAckManager.Instance();
-
-            // TODO, move to separate protocol message
-            // because checking with containsKey in every addMessage is costly
-            AddMessageClassId(1);
+            ServerMessagesIdsBinding.OnMessageClassIdAdd += AddMessageClassId;
         }
 
         public static ServerMessageManager Instance()
@@ -44,7 +40,6 @@ namespace SimpleMessageBus.Server
         private void AddMessageClassId(ushort messageClassId)
         {
             _buffers.Add(messageClassId, new ServerMessagesBuffer(50_000_000));
-            _buffersMessageClassIds.Add(messageClassId);
             _ackManager.AddMessageClassId(messageClassId);
         }
 
@@ -91,9 +86,7 @@ namespace SimpleMessageBus.Server
 
                 foreach (var ackRangeNode in toRelease)
                 {
-#if SERVER_MESSAGE_MANAGER_DEBUG
-                    Console.WriteLine($"=========== releasing from buffer: {ackRangeNode.First}-{ackRangeNode.Last}");
-#endif
+                    Debug.WriteLine($"=========== releasing from buffer: {ackRangeNode.First}-{ackRangeNode.Last}");
                     _buffers[messageClassId].Acknowledge(ackRangeNode);
                 }
             }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace SimpleMessageBus.Buffers
@@ -126,22 +127,18 @@ namespace SimpleMessageBus.Buffers
                 {
                     var ack = nodes[j];
 
-#if (DEBUG_ACK_BUFFER)
-                    Console.WriteLine($"== Ack loop: {ack.First}-{ack.Last}");
-#endif
+                    Debug.WriteLine($"== Ack loop: {ack.First}-{ack.Last}");
+
                     var shouldIncrementNodesIndex = true;
 
                     foreach (var node in _buffer)
                     {
-#if DEBUG_ACK_BUFFER
-                        Console.WriteLine($"n {node.First}-{node.Last} a {ack.First}-{ack.Last}");
-#endif
+                        Debug.WriteLine($"n {node.First}-{node.Last} a {ack.First}-{ack.Last}");
+
                         // if node contains or equals ack range it means that he whole ack range is unacked
                         if (node.Equals(ack) || node.Contains(ack))
                         {
-#if DEBUG_ACK_BUFFER
-                            Console.WriteLine($"[0] - remove {ack.First}-{ack.Last} from result");
-#endif
+                            Debug.WriteLine($"[0] - remove {ack.First}-{ack.Last} from result");
                             nodes.RemoveAt(j);
 
                             // if we remove item from nodes the index should not be changed
@@ -168,21 +165,16 @@ namespace SimpleMessageBus.Buffers
                             {
                                 // just change the current ack and stop
                                 ack.Last = node.First;
-#if DEBUG_ACK_BUFFER
-                                Console.WriteLine($"[0] change a last to {node.First} and go next");
-#endif
+                                Debug.WriteLine($"[0] change a last to {node.First} and go next");
+
                                 continue;
                             }
 
                             nodes.Add(new AckRangeNode { First = ack.First, Last = node.First });
-#if DEBUG_ACK_BUFFER
-                            Console.WriteLine($"[0] + add node: {ack.First}-{node.First}");
-#endif
-                            ack.First = node.First;
+                            Debug.WriteLine($"[0] + add node: {ack.First}-{node.First}");
 
-#if DEBUG_ACK_BUFFER
-                            Console.WriteLine($"[0] change a first to {node.First}, a {ack.First}-{ack.Last}");
-#endif
+                            ack.First = node.First;
+                            Debug.WriteLine($"[0] change a first to {node.First}, a {ack.First}-{ack.Last}");
                         }
 
                         // if node contains first index the first index should be moved behind the node
@@ -191,9 +183,7 @@ namespace SimpleMessageBus.Buffers
                         {
                             ack.First = node.Last;
 
-#if DEBUG_ACK_BUFFER
-                            Console.WriteLine($"[1] change a first to {node.Last}");
-#endif
+                            Debug.WriteLine($"[1] change a first to {node.Last}");
                         }
                     }
 

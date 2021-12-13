@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net5.0</TargetFramework>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\SimpleMessageBus.Abstractions\SimpleMessageBus.Abstractions.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="protobuf-net" Version="3.0.101" />
+      <PackageReference Include="protobuf-net.Core" Version="3.0.101" />
+    </ItemGroup>
+
+</Project>

@@ -6,6 +6,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <ProjectReference Include="..\SimpleMessageBus.Shared\SimpleMessageBus.Shared.csproj" />
       <ProjectReference Include="..\SimpleMessageBus\SimpleMessageBus.csproj" />
     </ItemGroup>
 

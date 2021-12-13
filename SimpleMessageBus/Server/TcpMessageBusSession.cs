@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.IO.Pipelines;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 using SimpleMessageBus.Abstractions;
 using SimpleMessageBus.Buffers;
 using SimpleMessageBus.Utils;
@@ -87,7 +89,13 @@ namespace SimpleMessageBus.Server
 
                         break;
                     case MessageType.Connect:
-                        // todo, deserialize connect message, extract message classes ids binding
+                        message = message.GetWithoutProtocol();
+                        var unserialized = JsonConvert.DeserializeObject<List<ushort>>(message.GetString());
+
+                        ServerMessagesIdsBinding.AddMessagesClassesIds(unserialized);
+                        SendResponseToConnectionMessage();
+
+                        Console.WriteLine($"Received connection message from {_sessionId} session");
 
                         break;
                     default:
@@ -99,6 +107,18 @@ namespace SimpleMessageBus.Server
                 Console.WriteLine(e);
                 throw;
             }
+        }
+
+        private void SendResponseToConnectionMessage()
+        {
+            // send session id to client. This will move client to connected state
+            using var ms = new MemoryStream();
+
+            ms.Write(MessageConfig.CreateTcpHeader(MessageType.Connect, 0, 0, 0));
+            ms.Write(BitConverter.GetBytes(_sessionId));
+            ms.Write(MessageConfig.Delimiter);
+                            
+            AddMessage(ms.ToArray());
         }
 
         private async Task WriteBulk()

@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO.Pipelines;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 using SimpleMessageBus.Abstractions;
 
 namespace SimpleMessageBus.Client
@@ -11,47 +13,44 @@ namespace SimpleMessageBus.Client
     {
         private readonly NetworkStream _stream;
         private readonly Socket _socket;
+        private bool _isConnected;
 
         private readonly List<Task> _tasks = new();
 
         private readonly ClientMessageManager _clientMessageManager;
         private readonly MessageAcknowledgementManager _messageAcknowledgementManager;
-
-        // type => messageClassId
-        private readonly Dictionary<Type, ushort> _messageBinding = new();
+        private readonly IMessagesIdsBinding _messagesIdsBinding;
 
         // messageClassId => consumer callback
         private readonly Dictionary<ushort, Action<IMessage>> _subscribers = new();
 
-        // todo, replace with session id from server by Connect packet
-        private static int _clientIdCounter;
-
-        public TcpMessageBusClient(string ip, int port)
+        public TcpMessageBusClient(string ip, int port, IMessagesIdsBinding messagesIdsBinding)
         {
-            _clientIdCounter++;
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            _clientMessageManager = new ClientMessageManager(_clientIdCounter);
+            _clientMessageManager = new ClientMessageManager(messagesIdsBinding);
             _socket.Connect(ip, port);
             _stream = new NetworkStream(_socket);
 
-            _messageAcknowledgementManager = new MessageAcknowledgementManager(_clientMessageManager);
-        }
+            _messageAcknowledgementManager =
+                new MessageAcknowledgementManager(_clientMessageManager, messagesIdsBinding);
+            _messagesIdsBinding = messagesIdsBinding;
 
-        public void AddBinding(Type type, ushort messageClassId)
-        {
-            _messageBinding.Add(type, messageClassId);
-            _messageAcknowledgementManager.AddMessageClassId(messageClassId);
-            _clientMessageManager.AddBinding(type, messageClassId);
+            _clientMessageManager.AddRawMessage(MessageType.Connect,
+                JsonConvert.SerializeObject(messagesIdsBinding.GetMessagesIds()), 0, 0, 0);
         }
 
         public void Send(IMessage message)
         {
-            _clientMessageManager.AddMessage(message, _messageBinding[message.GetType()]);
+            if (!_isConnected) SpinWait.SpinUntil(() => _isConnected);
+
+            _clientMessageManager.AddMessage(message, _messagesIdsBinding.GetMessageIdByType(message.GetType()));
         }
 
         public void Subscribe<T>(Action<T> action) where T : IMessage
         {
-            var messageClassId = _messageBinding[typeof(T)];
+            if (!_isConnected) SpinWait.SpinUntil(() => _isConnected);
+
+            var messageClassId = _messagesIdsBinding.GetMessageIdByType(typeof(T));
             _subscribers.Add(messageClassId, message => action((T)message));
 
             _clientMessageManager.AddRawMessage(MessageType.Subscribe, null, messageClassId, 0, 0);
@@ -104,6 +103,13 @@ namespace SimpleMessageBus.Client
                     case MessageType.Ack:
                         break;
                     case MessageType.Connect:
+                        var sessionId = BitConverter.ToInt32(message);
+
+                        _clientMessageManager.SessionId = sessionId;
+                        _isConnected = true;
+
+                        Console.WriteLine($"Connected as {sessionId} session");
+                        
                         break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(type), type, null);

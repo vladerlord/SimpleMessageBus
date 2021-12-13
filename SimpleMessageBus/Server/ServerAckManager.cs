@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using SimpleMessageBus.Buffers;
 
@@ -59,10 +60,8 @@ namespace SimpleMessageBus.Server
                         {
                             _undelivered[messageClassId][sessionId].AddUnAcked((node.First, node.Last));
 
-#if SERVER_ACKMANAGER_DEBUG
-                            Console.WriteLine(
+                            Debug.WriteLine(
                                 $"MsgClass: {messageClassId}. Session: {sessionId}. Unacked: {node.First}-{node.Last}");
-#endif
                         }
 
                         buffers[_timerIndex].Clear();

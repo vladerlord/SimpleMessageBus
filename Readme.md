@@ -8,10 +8,10 @@ Message broker can handle ~1_000_000 of ack'ed simple messages per second (local
 ## To-do
 - [x] Server messages ACK (acknowledgement) for multiple subscribers and resending undelivered messages.
 - [x] N subscribers for one message class. 
-- [ ] Connect message where client send information about message classes ids binding.
+- [x] Connect message where client send information about message classes ids binding.
 - [ ] N handlers for one message class in one client.
-- [ ] Client messages ACK and resending undelivered messages
 - [ ] Basic tcp stack: ping/disconnect/reconnect features
+- [ ] Client messages ACK and resending undelivered messages
 - [ ] resizable server message buffers
 
 ## Problems

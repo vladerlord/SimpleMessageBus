@@ -21,6 +21,8 @@ namespace SimpleMessageBus.Client
 
     public class ClientMessageManager
     {
+        public int SessionId;
+
         private const int SerializationWorkersAmount = 3;
         private const int UnserializedMessagesBufferSize = 1100;
         private readonly SemaphoreSlim _unserializedMessagesBackpressure = new(UnserializedMessagesBufferSize);
@@ -41,7 +43,7 @@ namespace SimpleMessageBus.Client
         private readonly ClientMessageNode<byte[]>[] _receivedMessages;
         private readonly object _receivedMessagesLock = new();
         private int _receivedMessagesIndex;
-        private readonly Dictionary<Type, ushort> _messageBinding = new();
+        private readonly IMessagesIdsBinding _messageBinding;
 
         private readonly AutoResetEvent _receivedMessagesControl = new(false);
         private readonly AutoResetEvent _serializationWorkersControl = new(false);
@@ -62,11 +64,11 @@ namespace SimpleMessageBus.Client
 
         private int _messagesRpsCounter;
         private int _receivedRpsCounter;
-        private readonly int _clientId;
 
-        public ClientMessageManager(int clientId)
+        public ClientMessageManager(IMessagesIdsBinding messagesIdsBinding)
         {
-            _clientId = clientId;
+            _messageBinding = messagesIdsBinding;
+
             ReadyToReceive = new ReservationCircularBlockingBuffer<ClientMessageNode<IMessage>[]>(10_000_000);
 
             _unserializedMessages = new ClientMessageNode<IMessage>[UnserializedMessagesBufferSize];
@@ -124,11 +126,6 @@ namespace SimpleMessageBus.Client
             tasks.Add(Task.Run(RawTcpMessagesWorker));
 
             return Task.WhenAny(tasks);
-        }
-
-        public void AddBinding(Type type, ushort messageClassId)
-        {
-            _messageBinding.Add(type, messageClassId);
         }
 
         public void AddMessage(IMessage message, ushort messageClassId)
@@ -341,7 +338,7 @@ namespace SimpleMessageBus.Client
 
                     foreach (var message in messages)
                     {
-                        foreach (var (classType, messageClassId) in _messageBinding)
+                        foreach (var (classType, messageClassId) in _messageBinding.GetMessagesIdsBinding())
                         {
                             if (messageClassId != message.MessageClassId)
                                 continue;
@@ -429,7 +426,7 @@ namespace SimpleMessageBus.Client
                     await Task.Delay(1000);
 
                     Console.WriteLine(
-                        $"[{_clientId}] Sent: {_messagesRpsCounter:#,##0.##}. Received: {_receivedRpsCounter:#,##0.##}");
+                        $"[{SessionId}] Sent: {_messagesRpsCounter:#,##0.##}. Received: {_receivedRpsCounter:#,##0.##}");
                     Interlocked.Exchange(ref _messagesRpsCounter, 0);
                     Interlocked.Exchange(ref _receivedRpsCounter, 0);
                 }

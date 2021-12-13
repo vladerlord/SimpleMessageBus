@@ -16,14 +16,13 @@ namespace SimpleMessageBus.Client
         // messageClassId => timerIndex => buffer
         private readonly Dictionary<ushort, Dictionary<ushort, List<AckRangeNode>>> _ackRanges = new();
 
-        public MessageAcknowledgementManager(ClientMessageManager clientMessageManager)
+        public MessageAcknowledgementManager(ClientMessageManager clientMessageManager,
+            IMessagesIdsBinding messagesIdsBinding)
         {
             _clientMessageManager = clientMessageManager;
-        }
 
-        public void AddMessageClassId(ushort messageClassId)
-        {
-            _ackRanges.Add(messageClassId, new Dictionary<ushort, List<AckRangeNode>>());
+            foreach (var messageClassId in messagesIdsBinding.GetMessagesIds())
+                _ackRanges.Add(messageClassId, new Dictionary<ushort, List<AckRangeNode>>());
         }
 
         public void AcknowledgeMessage(ushort messageClassId, int messageId, ushort timerIndex)
@@ -59,7 +58,7 @@ namespace SimpleMessageBus.Client
         public int GroupMessagesIdsIntoRanges()
         {
             var messageIds = _buffer.TakeMax();
-            
+
             // combine message ids into ranges. 0,1,2,3 = 0..4
             // this way we spend only 1-2 ack messages per second
             for (var i = 0; i < messageIds.Length; i++)
