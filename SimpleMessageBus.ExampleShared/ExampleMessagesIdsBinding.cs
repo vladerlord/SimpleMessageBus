@@ -1,6 +1,6 @@
 ﻿using SimpleMessageBus.Abstractions;
 
-namespace SimpleMessageBus.Shared
+namespace SimpleMessageBus.ExampleShared
 {
     public class ExampleMessagesIdsBinding : MessagesIdsBinding
     {

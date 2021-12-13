@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
 using SimpleMessageBus.Client;
-using SimpleMessageBus.Shared;
+using SimpleMessageBus.ExampleShared;
 
 namespace SimpleMessageBus.ExampleProducer
 {

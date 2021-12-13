@@ -1,7 +1,7 @@
 using ProtoBuf;
 using SimpleMessageBus.Abstractions;
 
-namespace SimpleMessageBus.Shared
+namespace SimpleMessageBus.ExampleShared
 {
     [ProtoContract, CompatibilityLevel(CompatibilityLevel.Level300)]
     public class PersonMessage : IMessage
