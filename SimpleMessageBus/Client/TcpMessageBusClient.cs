@@ -51,8 +51,14 @@ namespace SimpleMessageBus.Client
             if (!_isConnected) SpinWait.SpinUntil(() => _isConnected);
 
             var messageClassId = _messagesIdsBinding.GetMessageIdByType(typeof(T));
-            _subscribers.Add(messageClassId, message => action((T)message));
 
+            if (_subscribers.ContainsKey(messageClassId))
+            {
+                _subscribers[messageClassId] += message => action((T)message);
+                return;
+            }
+
+            _subscribers.Add(messageClassId, message => action((T)message));
             _clientMessageManager.AddRawMessage(MessageType.Subscribe, null, messageClassId, 0, 0);
         }
 
@@ -109,7 +115,7 @@ namespace SimpleMessageBus.Client
                         _isConnected = true;
 
                         Console.WriteLine($"Connected as {sessionId} session");
-                        
+
                         break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(type), type, null);
@@ -135,8 +141,7 @@ namespace SimpleMessageBus.Client
                     {
                         foreach (var message in messages)
                         {
-                            _subscribers[message.MessageClassId].Invoke(message.Content);
-
+                            _subscribers[message.MessageClassId](message.Content);
                             _messageAcknowledgementManager.AcknowledgeMessage(message.MessageClassId,
                                 message.MessageId, message.TimerIndex);
                         }

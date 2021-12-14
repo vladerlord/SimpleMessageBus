@@ -36,9 +36,13 @@ namespace SimpleMessageBus.ExampleProducer
 
             client1.Subscribe((PersonMessage personMessage) =>
             {
-                // Console.WriteLine($"[Client1]: {personMessage.Id}");
+                Console.WriteLine($"[Client1][subscriber1]: {personMessage.Id}");
                 if (personMessage.Id != ++idCounter1)
                     throw new Exception($"[1] Wrong order. Must be: {idCounter1} is {personMessage.Id}");
+            });
+            client1.Subscribe((PersonMessage personMessage) =>
+            {
+                Console.WriteLine($"[Client1][subscriber2]: {personMessage.Id}");
             });
             // client2.Subscribe((PersonMessage personMessage) =>
             // {
